@@ -130,7 +130,7 @@ export function createAutotaskRoutes(): RouteHandler {
         const raw = await readBody(req);
         const body = raw ? JSON.parse(raw) : {};
         const apiKey = String(body.apiKey || "").trim();
-        const model = String(body.model || "meta/llama-3.3-70b-instruct").trim();
+        const model = String(body.model || "nvidia/llama-3.1-nemotron-70b-instruct").trim();
         const prompt = String(body.prompt || "").trim();
         const searchEnabled = body.searchEnabled !== false;
 
@@ -169,38 +169,67 @@ Formatting instructions:
           ? `TASK INSTRUCTIONS:\n${prompt}\n\nLATEST REAL-TIME WEB SEARCH DATA:\n${searchContext}\n\nPlease synthesize the information above into a complete, thorough, beautifully formatted briefing.`
           : `TASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
 
-        const nvResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-            "Accept": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: systemMessage },
-              { role: "user", content: userMessage },
-            ],
-            temperature: 0.3,
-            max_tokens: 3000,
-          }),
-        });
+        // Fallback model cascade in case chosen model is deprecated or unavailable
+        const modelsToTry = [
+          model,
+          "nvidia/llama-3.1-nemotron-70b-instruct",
+          "mistralai/mistral-large-2-instruct",
+          "mistralai/mistral-7b-instruct-v0.3",
+        ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
 
-        if (!nvResponse.ok) {
-          const errText = await nvResponse.text();
-          return json(res, nvResponse.status, {
+        let lastErrorText = "";
+        let activeModelUsed = model;
+        let nvData: { choices?: Array<{ message?: { content?: string } }> } | null = null;
+
+        for (const currentModel of modelsToTry) {
+          try {
+            const nvResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`,
+                "Accept": "application/json",
+              },
+              body: JSON.stringify({
+                model: currentModel,
+                messages: [
+                  { role: "system", content: systemMessage },
+                  { role: "user", content: userMessage },
+                ],
+                temperature: 0.3,
+                max_tokens: 3000,
+              }),
+            });
+
+            if (nvResponse.ok) {
+              nvData = (await nvResponse.json()) as { choices?: Array<{ message?: { content?: string } }> };
+              activeModelUsed = currentModel;
+              break;
+            } else {
+              const errText = await nvResponse.text();
+              lastErrorText = `NVIDIA API error (${nvResponse.status}) for ${currentModel}: ${errText.slice(0, 260)}`;
+              if (nvResponse.status === 410 || nvResponse.status === 404) {
+                continue;
+              }
+              break;
+            }
+          } catch (fetchErr) {
+            lastErrorText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+          }
+        }
+
+        if (!nvData || !nvData.choices?.[0]?.message?.content) {
+          return json(res, 500, {
             ok: false,
-            error: `NVIDIA NIM API error (${nvResponse.status}): ${errText.slice(0, 300)}`,
+            error: lastErrorText || "No response received from NVIDIA NIM API.",
           });
         }
 
-        const nvData = await nvResponse.json() as { choices?: Array<{ message?: { content?: string } }> };
-        const content = nvData.choices?.[0]?.message?.content ?? "No output generated.";
+        const content = nvData.choices[0].message.content;
 
         return json(res, 200, {
           ok: true,
-          model,
+          model: activeModelUsed,
           summary: content,
           sources: searchResults,
           completedAt: Date.now(),

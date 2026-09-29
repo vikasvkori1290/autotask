@@ -7,33 +7,34 @@ export interface NvidiaModelOption {
 
 export const AVAILABLE_NVIDIA_MODELS: NvidiaModelOption[] = [
   {
-    id: "meta/llama-3.3-70b-instruct",
-    name: "Llama 3.3 70B Instruct",
-    description: "Best for comprehensive research, structured briefings, and deep news synthesis.",
+    id: "nvidia/llama-3.1-nemotron-70b-instruct",
+    name: "NVIDIA Nemotron 70B",
+    description: "Flagship 70B model optimized by NVIDIA for accurate reasoning, real-time news synthesis, and instruction following.",
     badge: "Recommended",
   },
   {
-    id: "deepseek-ai/deepseek-r1",
-    name: "DeepSeek R1",
-    description: "Exceptional deep analytical reasoning and nuanced synthesis.",
-    badge: "Reasoning",
+    id: "mistralai/mistral-large-2-instruct",
+    name: "Mistral Large 2 (123B)",
+    description: "Top-tier 123B frontier model with exceptional reasoning, broad context, and high accuracy.",
+    badge: "Frontier",
   },
   {
-    id: "nvidia/llama-3.1-nemotron-70b-instruct",
-    name: "NVIDIA Nemotron 70B",
-    description: "NVIDIA's customized high-accuracy instruction-following model.",
-    badge: "High Accuracy",
-  },
-  {
-    id: "meta/llama-3.1-8b-instruct",
-    name: "Llama 3.1 8B Instruct",
-    description: "Ultra-fast lightweight model for rapid bullet summaries.",
+    id: "mistralai/mistral-7b-instruct-v0.3",
+    name: "Mistral 7B v0.3",
+    description: "Ultra-fast, lightweight model ideal for quick bullet-point briefings.",
     badge: "Fast",
+  },
+  {
+    id: "nvidia/nemotron-4-340b-instruct",
+    name: "NVIDIA Nemotron-4 340B",
+    description: "Massive 340B titan model designed for complex analysis and deep synthetic reasoning.",
+    badge: "Titan 340B",
   },
 ];
 
 const KEY_STORAGE = "autotask_nvidia_key";
 const MODEL_STORAGE = "autotask_nvidia_model";
+export const DEFAULT_MODEL = "nvidia/llama-3.1-nemotron-70b-instruct";
 
 export function getNvidiaApiKey(): string {
   return (localStorage.getItem(KEY_STORAGE) || "").trim();
@@ -44,7 +45,16 @@ export function setNvidiaApiKey(key: string): void {
 }
 
 export function getNvidiaModel(): string {
-  return localStorage.getItem(MODEL_STORAGE) || "meta/llama-3.3-70b-instruct";
+  const stored = localStorage.getItem(MODEL_STORAGE);
+  if (!stored) return DEFAULT_MODEL;
+
+  // Automatically migrate deprecated or retired models (e.g. meta/llama-3.3-70b-instruct)
+  const validIds = AVAILABLE_NVIDIA_MODELS.map((m) => m.id);
+  if (!validIds.includes(stored)) {
+    localStorage.setItem(MODEL_STORAGE, DEFAULT_MODEL);
+    return DEFAULT_MODEL;
+  }
+  return stored;
 }
 
 export function setNvidiaModel(model: string): void {

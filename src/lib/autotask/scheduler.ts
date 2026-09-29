@@ -107,56 +107,6 @@ function playDeliveryChime() {
     console.debug("Chime playback not allowed before user interaction", err);
   }
 }
-
-/**
- * Direct browser fallback to NVIDIA NIM API
- */
-async function executeNvidiaDirectly(apiKey: string, model: string, prompt: string): Promise<TaskResult> {
-  const dateStr = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  const systemMessage = `You are AutoTask AI, an elite autonomous research and briefing agent powered by NVIDIA NIM.
-Today's date is ${dateStr}.
-The user scheduled this task to be fully researched, synthesized, and prepared ahead of time so they receive a comprehensive, high-signal, actionable briefing.
-
-Formatting instructions:
-- Provide a clean, well-structured report using Markdown with bold section headings.
-- Include an Executive Summary, Key Findings/Developments, Deep Dive Details, and Key Takeaways.
-- Be concise, objective, and dense with valuable information.`;
-
-  const userMessage = `TASK INSTRUCTIONS:\n${prompt}\n\nPlease analyze, research, and formulate a complete, thorough, beautifully formatted briefing for this scheduled task.`;
-
-  const nvResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemMessage },
-        { role: "user", content: userMessage },
-      ],
-      temperature: 0.3,
-      max_tokens: 3000,
-    }),
-  });
-
-  if (!nvResponse.ok) {
-    const errText = await nvResponse.text();
-    throw new Error(`NVIDIA NIM API error (${nvResponse.status}): ${errText.slice(0, 250)}`);
-  }
-
-  const nvData = await nvResponse.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const content = nvData.choices?.[0]?.message?.content ?? "No output generated.";
-
-  return {
-    summary: content,
-    sources: [],
-    completedAt: Date.now(),
-    model,
-  };
-}
-
 let isRunnerExecuting = false;
 
 /**
@@ -225,7 +175,7 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         let result: TaskResult | null = null;
         let executionError = "";
 
-        // First attempt: Server route (which performs DuckDuckGo web search + NVIDIA API)
+        // Execute via backend proxy (which handles DuckDuckGo search + NVIDIA NIM API with no CORS restrictions)
         try {
           const res = await fetch("/api/autotask/execute", {
             method: "POST",
@@ -238,34 +188,20 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             }),
           });
 
-          if (res.ok) {
-            const data = await res.json();
-            if (data.ok) {
-              result = {
-                summary: data.summary,
-                sources: data.sources || [],
-                completedAt: data.completedAt || Date.now(),
-                model: data.model || model,
-              };
-            } else {
-              executionError = data.error || "Server execution failed.";
-            }
+          const data = await res.json().catch(() => null);
+
+          if (res.ok && data && data.ok) {
+            result = {
+              summary: data.summary,
+              sources: data.sources || [],
+              completedAt: data.completedAt || Date.now(),
+              model: data.model || model,
+            };
           } else {
-            const errData = await res.json().catch(() => ({}));
-            executionError = errData.error || `Server responded with ${res.status}`;
+            executionError = (data && data.error) || `Execution failed (HTTP ${res.status})`;
           }
         } catch (serverErr) {
           executionError = serverErr instanceof Error ? serverErr.message : String(serverErr);
-        }
-
-        // Second attempt: If server route failed or was blocked by auth, run directly via NVIDIA NIM API
-        if (!result) {
-          try {
-            result = await executeNvidiaDirectly(apiKey, model, queuedTask.prompt);
-            executionError = "";
-          } catch (directErr) {
-            executionError = directErr instanceof Error ? directErr.message : String(directErr);
-          }
         }
 
         // Reload fresh tasks from storage and save final state
