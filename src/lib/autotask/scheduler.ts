@@ -54,7 +54,7 @@ export function addTask(
 ): AutoTask {
   const cleanPrompt = prompt.trim();
   const title = customTitle || (cleanPrompt.length > 40 ? cleanPrompt.slice(0, 37) + "..." : cleanPrompt);
-  
+
   const newTask: AutoTask = {
     id: "task_" + Math.random().toString(36).slice(2, 10),
     title,
@@ -106,6 +106,55 @@ function playDeliveryChime() {
   } catch (err) {
     console.debug("Chime playback not allowed before user interaction", err);
   }
+}
+
+/**
+ * Direct browser fallback to NVIDIA NIM API
+ */
+async function executeNvidiaDirectly(apiKey: string, model: string, prompt: string): Promise<TaskResult> {
+  const dateStr = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const systemMessage = `You are AutoTask AI, an elite autonomous research and briefing agent powered by NVIDIA NIM.
+Today's date is ${dateStr}.
+The user scheduled this task to be fully researched, synthesized, and prepared ahead of time so they receive a comprehensive, high-signal, actionable briefing.
+
+Formatting instructions:
+- Provide a clean, well-structured report using Markdown with bold section headings.
+- Include an Executive Summary, Key Findings/Developments, Deep Dive Details, and Key Takeaways.
+- Be concise, objective, and dense with valuable information.`;
+
+  const userMessage = `TASK INSTRUCTIONS:\n${prompt}\n\nPlease analyze, research, and formulate a complete, thorough, beautifully formatted briefing for this scheduled task.`;
+
+  const nvResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemMessage },
+        { role: "user", content: userMessage },
+      ],
+      temperature: 0.3,
+      max_tokens: 3000,
+    }),
+  });
+
+  if (!nvResponse.ok) {
+    const errText = await nvResponse.text();
+    throw new Error(`NVIDIA NIM API error (${nvResponse.status}): ${errText.slice(0, 250)}`);
+  }
+
+  const nvData = await nvResponse.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = nvData.choices?.[0]?.message?.content ?? "No output generated.";
+
+  return {
+    summary: content,
+    sources: [],
+    completedAt: Date.now(),
+    model,
+  };
 }
 
 let isRunnerExecuting = false;
@@ -172,8 +221,12 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         saveTasks(tasks);
         onUpdate([...tasks]);
 
+        const model = getNvidiaModel();
+        let result: TaskResult | null = null;
+        let executionError = "";
+
+        // First attempt: Server route (which performs DuckDuckGo web search + NVIDIA API)
         try {
-          const model = getNvidiaModel();
           const res = await fetch("/api/autotask/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -185,38 +238,54 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             }),
           });
 
-          const data = await res.json();
-          // Reload fresh tasks array in case user added or removed tasks during execution
-          tasks = getTasks();
-          const target = tasks.find((t) => t.id === queuedTask.id);
-
-          if (target) {
-            if (res.ok && data.ok) {
-              target.status = "ready";
-              target.readyAt = Date.now();
-              target.result = {
+          if (res.ok) {
+            const data = await res.json();
+            if (data.ok) {
+              result = {
                 summary: data.summary,
                 sources: data.sources || [],
                 completedAt: data.completedAt || Date.now(),
                 model: data.model || model,
               };
             } else {
-              target.status = "failed";
-              target.error = data.error || "Failed to complete task.";
+              executionError = data.error || "Server execution failed.";
             }
-            hasChanges = true;
+          } else {
+            const errData = await res.json().catch(() => ({}));
+            executionError = errData.error || `Server responded with ${res.status}`;
           }
-        } catch (err) {
-          tasks = getTasks();
-          const target = tasks.find((t) => t.id === queuedTask.id);
-          if (target) {
-            target.status = "failed";
-            target.error = err instanceof Error ? err.message : String(err);
-            hasChanges = true;
-          }
-        } finally {
-          isRunnerExecuting = false;
+        } catch (serverErr) {
+          executionError = serverErr instanceof Error ? serverErr.message : String(serverErr);
         }
+
+        // Second attempt: If server route failed or was blocked by auth, run directly via NVIDIA NIM API
+        if (!result) {
+          try {
+            result = await executeNvidiaDirectly(apiKey, model, queuedTask.prompt);
+            executionError = "";
+          } catch (directErr) {
+            executionError = directErr instanceof Error ? directErr.message : String(directErr);
+          }
+        }
+
+        // Reload fresh tasks from storage and save final state
+        tasks = getTasks();
+        const target = tasks.find((t) => t.id === queuedTask.id);
+
+        if (target) {
+          if (result) {
+            target.status = "ready";
+            target.readyAt = Date.now();
+            target.result = result;
+            target.error = undefined;
+          } else {
+            target.status = "failed";
+            target.error = executionError || "Failed to execute task.";
+          }
+          hasChanges = true;
+        }
+
+        isRunnerExecuting = false;
       }
     }
 

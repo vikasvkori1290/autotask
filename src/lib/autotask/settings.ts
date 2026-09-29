@@ -52,14 +52,34 @@ export function setNvidiaModel(model: string): void {
 }
 
 export async function testNvidiaKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
+  // First attempt via server proxy
   try {
     const res = await fetch("/api/autotask/validate-key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apiKey }),
     });
-    const data = await res.json();
-    return data;
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+  } catch {
+    // Fall through to direct probe
+  }
+
+  // Fallback: Direct probe to NVIDIA NIM API
+  try {
+    const probe = await fetch("https://integrate.api.nvidia.com/v1/models", {
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Accept": "application/json",
+      },
+    });
+    if (!probe.ok) {
+      const errText = await probe.text();
+      return { ok: false, error: `NVIDIA API key rejected (${probe.status}): ${errText.slice(0, 180)}` };
+    }
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

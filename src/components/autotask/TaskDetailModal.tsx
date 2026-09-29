@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { X, Clock, Repeat, CheckCircle2, Loader2, Copy, Check, Trash2, ExternalLink, Sparkles, AlertCircle } from "lucide-react";
+import { X, Clock, Repeat, CheckCircle2, Loader2, Copy, Check, Trash2, ExternalLink, Sparkles, AlertCircle, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AutoTask } from "../../lib/autotask/scheduler";
+import { saveTasks, getTasks, type AutoTask } from "../../lib/autotask/scheduler";
 
 interface TaskDetailModalProps {
   task: AutoTask | null;
@@ -24,6 +24,18 @@ export function TaskDetailModal({ task, onClose, onDelete }: TaskDetailModalProp
     navigator.clipboard.writeText(task.result.summary);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRetry = () => {
+    const all = getTasks();
+    const t = all.find((x) => x.id === task.id);
+    if (t) {
+      t.status = "queued";
+      t.error = undefined;
+      saveTasks(all);
+      task.status = "queued";
+      task.error = undefined;
+    }
   };
 
   const statusConfig = {
@@ -116,12 +128,20 @@ export function TaskDetailModal({ task, onClose, onDelete }: TaskDetailModalProp
           )}
 
           {task.status === "failed" && (
-            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-300 text-xs space-y-1">
-              <div className="font-semibold flex items-center gap-1.5">
-                <AlertCircle className="size-4" />
-                Error occurred during execution
+            <div className="p-5 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-300 text-xs space-y-3">
+              <div className="font-semibold flex items-center gap-2 text-sm text-rose-200">
+                <AlertCircle className="size-4 text-rose-400" />
+                Execution could not complete
               </div>
-              <p>{task.error || "Could not complete task."}</p>
+              <p className="leading-relaxed bg-black/20 p-3 rounded-xl font-mono text-[11px] text-rose-300/90">{task.error || "Could not complete task."}</p>
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="py-2 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-bold text-xs flex items-center gap-2 transition shadow-md shadow-emerald-500/20"
+              >
+                <RotateCcw className="size-3.5" />
+                <span>Retry Task Now</span>
+              </button>
             </div>
           )}
 
