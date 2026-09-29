@@ -4,6 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { json, readBody } from "../harness/http.ts";
 import type { RequestAuth } from "../request-auth.ts";
+import { createAutotaskRoutes } from "./autotask.ts";
 
 /** "Not my route": the next handler, then index.ts's inline routes, get a turn. */
 export const PASS: unique symbol = Symbol("route.pass");
@@ -25,7 +26,7 @@ export interface RouteContext {
 /** Resolve with PASS to decline; anything else means the request was answered. */
 export type RouteHandler = (ctx: RouteContext) => Promise<typeof PASS | void>;
 
-export const ROUTES: RouteHandler[] = [];
+export const ROUTES: RouteHandler[] = [createAutotaskRoutes()];
 
 /** Runs handlers in order until one answers; true means stop routing. A
  * handler that wrote a response but returned PASS by mistake still counts as
