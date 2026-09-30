@@ -13,7 +13,7 @@ export async function handleAutotaskRequest(req: IncomingMessage, res: ServerRes
   if (req.method === "OPTIONS" && path.startsWith("/api/autotask/")) {
     res.statusCode = 204;
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, PUT, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.end();
     return true;

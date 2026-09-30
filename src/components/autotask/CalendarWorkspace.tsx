@@ -17,6 +17,7 @@ import {
   ArrowRight,
   Smartphone,
   Sliders,
+  CheckSquare2,
 } from "lucide-react";
 import type { AutotaskUser } from "../../lib/autotask/auth";
 import { signOut } from "../../lib/autotask/auth";
@@ -27,18 +28,20 @@ import {
   startBackgroundRunner,
   type AutoTask,
 } from "../../lib/autotask/scheduler";
+import { initNotifications } from "../../lib/autotask/notifications";
 import { TaskCreateModal } from "./TaskCreateModal";
-import { TaskDetailModal } from "./TaskDetailModal";
+import { TaskResultPageView } from "./TaskResultPageView";
 import { NvidiaSetupModal } from "./NvidiaSetupModal";
 import { OpencodeSetupModal } from "./OpencodeSetupModal";
 import { ConnectorsModal } from "./ConnectorsModal";
+import { TodayTasksView } from "./TodayTasksView";
 
 interface CalendarWorkspaceProps {
   user: AutotaskUser;
   onSignOut: () => void;
 }
 
-type ViewMode = "week" | "day" | "agenda";
+type ViewMode = "week" | "day" | "agenda" | "today-tasks";
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -100,12 +103,34 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
     return () => clearInterval(timer);
   }, []);
 
-  // Request browser desktop notification permission on mount
+  // Initialize mobile & web notifications with deep-link handler
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission();
-    }
+    void initNotifications((taskId) => {
+      const all = getTasks();
+      const target = all.find((t) => t.id === taskId);
+      if (target) {
+        setSelectedTask(target);
+      }
+    });
   }, []);
+
+  // Deep-link handler via URL hash: #task=<id>
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith("#task=")) {
+        const taskId = hash.replace("#task=", "").split("&")[0];
+        const all = tasks.length > 0 ? tasks : getTasks();
+        const found = all.find((t) => t.id === taskId);
+        if (found) {
+          setSelectedTask(found);
+        }
+      }
+    };
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+    return () => window.removeEventListener("hashchange", handleHash);
+  }, [tasks]);
 
   // Load tasks and start autonomous background runner
   useEffect(() => {
@@ -167,11 +192,6 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
     return currentDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
   }, [currentDate]);
 
-  // Format full date label for mobile
-  const fullDateLabel = useMemo(() => {
-    return currentDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-  }, [currentDate]);
-
   const isToday = (d: Date) => {
     const now = new Date();
     return (
@@ -197,6 +217,14 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
       return k === dayKey;
     });
   };
+
+  // Count of tasks scheduled for today
+  const todayTasksCount = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const end = start + 24 * 60 * 60 * 1000 - 1;
+    return tasks.filter((t) => t.targetTime >= start && t.targetTime <= end).length;
+  }, [tasks]);
 
   // Group tasks by Day for timeline grid
   const tasksByDay = useMemo(() => {
@@ -241,183 +269,272 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
     return groups;
   }, [tasks]);
 
-  return (
-    <div className="min-h-screen w-full flex flex-col bg-slate-50 text-slate-900 select-none overflow-hidden relative font-sans">
-      {/* Subtle background ambient tint */}
-      <div className="absolute top-0 right-1/4 w-[500px] h-[300px] bg-indigo-500/[0.03] blur-[120px] rounded-full pointer-events-none" />
-      <div className="absolute bottom-0 left-1/4 w-[500px] h-[300px] bg-emerald-500/[0.03] blur-[120px] rounded-full pointer-events-none" />
+  // Handle closing detail modal and clearing hash
+  const handleCloseDetailModal = () => {
+    setSelectedTask(null);
+    if (typeof window !== "undefined" && window.location.hash.startsWith("#task=")) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  };
 
-      {/* TOP APP BAR */}
-      <header className="relative z-30 shrink-0 border-b border-slate-200/90 autotask-glass px-3.5 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-2 shadow-xs">
-        {/* Left Section: Logo + Date Navigator */}
-        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-          {/* Brand Mark */}
-          <div className="flex items-center gap-2.5 shrink-0">
-            <div className="size-9 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-sm">
-              <Sparkles className="size-4 text-white" />
-            </div>
-            <div className="hidden sm:block">
-              <div className="text-sm font-bold tracking-tight text-slate-900 flex items-center gap-1.5">
-                <span>AutoTask</span>
-                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
-                  AI
+  // If a task is selected, render full-page response view (no popup modal)
+  if (selectedTask) {
+    return (
+      <TaskResultPageView
+        task={selectedTask}
+        onBack={handleCloseDetailModal}
+        onDelete={(id) => {
+          deleteTask(id);
+          setTasks(getTasks());
+          setSelectedTask(null);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="h-full min-h-screen w-full flex flex-col bg-slate-50 text-slate-900 select-none relative font-sans overflow-hidden">
+      {viewMode === "today-tasks" ? (
+        <TodayTasksView
+          tasks={tasks}
+          onBackToCalendar={() => setViewMode(isMobile ? "day" : "week")}
+          onSelectTask={(task) => setSelectedTask(task)}
+          onOpenCreate={() => {
+            setCreateModalDate(new Date());
+            setCreateModalHour(new Date().getHours() + 1);
+            setIsCreateOpen(true);
+          }}
+          onDeleteTask={(id) => {
+            deleteTask(id);
+            setTasks(getTasks());
+          }}
+        />
+      ) : (
+        <>
+          {/* Subtle background ambient tint */}
+          <div className="absolute top-0 right-1/4 w-[500px] h-[300px] bg-indigo-500/[0.03] blur-[120px] rounded-full pointer-events-none" />
+          <div className="absolute bottom-0 left-1/4 w-[500px] h-[300px] bg-emerald-500/[0.03] blur-[120px] rounded-full pointer-events-none" />
+
+          {/* TOP APP BAR */}
+          <header className="relative z-30 shrink-0 border-b border-slate-200/90 autotask-glass px-3 sm:px-6 py-2 sm:py-3 flex items-center justify-between gap-2 shadow-xs">
+            {/* Left Section: Logo + Title / Month */}
+            <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+              {/* Brand Mark */}
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="size-8 sm:size-9 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-500 flex items-center justify-center shadow-xs text-white">
+                  <Sparkles className="size-4" />
+                </div>
+                <div>
+                  <div className="text-xs sm:text-sm font-bold tracking-tight text-slate-900 flex items-center gap-1.5 leading-tight">
+                    <span>AutoTask</span>
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      AI
+                    </span>
+                  </div>
+                  {/* On mobile: subtle month indicator directly under brand name */}
+                  <div className="sm:hidden text-[11px] font-semibold text-slate-500 leading-tight">
+                    {monthYearLabel}
+                  </div>
+                </div>
+              </div>
+
+              <div className="h-5 w-[1px] bg-slate-200 hidden sm:block shrink-0" />
+
+              {/* Desktop Date controls */}
+              <div className="hidden sm:flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleToday}
+                  className="py-1 px-2.5 rounded-lg border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition active:scale-95"
+                >
+                  Today
+                </button>
+
+                <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={handlePrev}
+                    className="p-1 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition active:scale-95"
+                    aria-label="Previous"
+                  >
+                    <ChevronLeft className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNext}
+                    className="p-1 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition active:scale-95"
+                    aria-label="Next"
+                  >
+                    <ChevronRight className="size-3.5" />
+                  </button>
+                </div>
+
+                <span className="text-sm font-bold text-slate-900 tracking-tight ml-1">
+                  {monthYearLabel}
                 </span>
               </div>
             </div>
-          </div>
 
-          <div className="h-5 w-[1px] bg-slate-200 hidden sm:block" />
+            {/* Center Section: View Mode Switcher (Desktop Only) */}
+            {!isMobile && (
+              <div className="hidden md:flex p-1 bg-slate-100 border border-slate-200/80 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("day")}
+                  className={`py-1 px-3 text-xs font-semibold rounded-lg transition ${
+                    viewMode === "day"
+                      ? "bg-white text-slate-900 shadow-xs"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Day
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("week")}
+                  className={`py-1 px-3 text-xs font-semibold rounded-lg transition ${
+                    viewMode === "week"
+                      ? "bg-white text-slate-900 shadow-xs"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Week
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("agenda")}
+                  className={`py-1 px-3 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 ${
+                    viewMode === "agenda"
+                      ? "bg-white text-slate-900 shadow-xs"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  <ListTodo className="size-3.5" />
+                  <span>Agenda</span>
+                </button>
+              </div>
+            )}
 
-          {/* Date controls */}
-          <div className="flex items-center gap-1 sm:gap-2">
-            <button
-              type="button"
-              onClick={handleToday}
-              className="py-1 px-2.5 rounded-lg border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 text-[11px] sm:text-xs font-semibold text-slate-700 shadow-xs transition active:scale-95"
-            >
-              Today
-            </button>
+            {/* Right Section: Action Buttons */}
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {/* Mobile Quick Navigation Controls */}
+              <div className="flex sm:hidden items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleToday}
+                  className="py-1 px-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 shadow-2xs active:scale-95 transition"
+                >
+                  Today
+                </button>
+                <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={handlePrev}
+                    className="p-1 rounded hover:bg-slate-100 text-slate-600 active:scale-95 transition"
+                    aria-label="Previous"
+                  >
+                    <ChevronLeft className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNext}
+                    className="p-1 rounded hover:bg-slate-100 text-slate-600 active:scale-95 transition"
+                    aria-label="Next"
+                  >
+                    <ChevronRight className="size-3.5" />
+                  </button>
+                </div>
+              </div>
 
-            <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 shadow-xs">
+              {/* Today's Tasks Button (Desktop & Tablet) */}
               <button
                 type="button"
-                onClick={handlePrev}
-                className="p-1 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition active:scale-95"
-                aria-label="Previous"
+                onClick={() => setViewMode("today-tasks")}
+                className="hidden sm:flex items-center gap-1.5 py-1.5 px-3 rounded-xl border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-xs font-bold text-indigo-700 shadow-xs transition active:scale-95"
+                title="Open Today's Tasks, History & Upcoming Briefings"
               >
-                <ChevronLeft className="size-3.5" />
+                <CheckSquare2 className="size-3.5 text-indigo-600" />
+                <span>Today's Tasks</span>
+                {todayTasksCount > 0 && (
+                  <span className="text-[10px] font-extrabold px-1.5 py-0.2 rounded-full bg-indigo-600 text-white">
+                    {todayTasksCount}
+                  </span>
+                )}
               </button>
+
+              {/* Schedule New Task (Desktop primary) */}
               <button
                 type="button"
-                onClick={handleNext}
-                className="p-1 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition active:scale-95"
-                aria-label="Next"
+                onClick={() => {
+                  setCreateModalDate(currentDate);
+                  setCreateModalHour(new Date().getHours() + 1);
+                  setIsCreateOpen(true);
+                }}
+                className="hidden sm:flex items-center gap-1.5 py-1.5 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-sm active:scale-95 transition"
               >
-                <ChevronRight className="size-3.5" />
+                <Plus className="size-3.5 stroke-[2.5]" />
+                <span>New Task</span>
+              </button>
+
+              {/* Download Mobile APK Button */}
+              <a
+                href="/autotask.apk"
+                download="AutoTask.apk"
+                className="flex items-center gap-1.5 p-1.5 sm:py-1.5 sm:px-2.5 rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-100 text-[11px] sm:text-xs font-semibold text-sky-700 transition"
+                title="Download Android APK"
+              >
+                <Smartphone className="size-3.5 text-sky-600" />
+                <span className="hidden lg:inline">APK</span>
+              </a>
+
+              {/* Desktop Connectors Button */}
+              <button
+                type="button"
+                onClick={() => setIsConnectorsOpen(true)}
+                className="hidden md:flex items-center gap-1.5 py-1.5 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 shadow-xs transition"
+                title="Connected Apps & Services"
+              >
+                <Boxes className="size-3.5 text-indigo-600" />
+                <span className="hidden xl:inline">Connectors</span>
+              </button>
+
+              {/* Desktop Engines Dropdown / Buttons */}
+              <div className="hidden lg:flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setIsNvidiaModalOpen(true)}
+                  className="flex items-center gap-1 py-1.5 px-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-xs font-semibold text-emerald-800 transition"
+                  title="Configure NVIDIA NIM Model"
+                >
+                  <Cpu className="size-3.5 text-emerald-600" />
+                  <span className="hidden xl:inline">{getNvidiaModel().split("/").pop()}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsOpencodeModalOpen(true)}
+                  className="flex items-center gap-1 py-1.5 px-2 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-xs font-semibold text-purple-800 transition"
+                  title="Configure OpenCode Engine"
+                >
+                  <Code2 className="size-3.5 text-purple-600" />
+                  <span className="hidden xl:inline">{getOpencodeModel().split("/").pop()}</span>
+                </button>
+              </div>
+
+              {/* User Sign Out */}
+              <button
+                type="button"
+                onClick={() => {
+                  signOut();
+                  onSignOut();
+                }}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition"
+                title={`Signed in as ${user.email} (Sign out)`}
+              >
+                <LogOut className="size-4" />
               </button>
             </div>
-
-            <span className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight truncate ml-1">
-              {isMobile ? fullDateLabel : monthYearLabel}
-            </span>
-          </div>
-        </div>
-
-        {/* Center Section: View Mode Switcher (Desktop Only) */}
-        {!isMobile && (
-          <div className="hidden md:flex p-1 bg-slate-100 border border-slate-200/80 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setViewMode("day")}
-              className={`py-1 px-3 text-xs font-semibold rounded-lg transition ${
-                viewMode === "day"
-                  ? "bg-white text-slate-900 shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Day
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("week")}
-              className={`py-1 px-3 text-xs font-semibold rounded-lg transition ${
-                viewMode === "week"
-                  ? "bg-white text-slate-900 shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Week
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("agenda")}
-              className={`py-1 px-3 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 ${
-                viewMode === "agenda"
-                  ? "bg-white text-slate-900 shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              <ListTodo className="size-3.5" />
-              <span>Agenda</span>
-            </button>
-          </div>
-        )}
-
-        {/* Right Section: Action Buttons */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Schedule New Task (Desktop primary) */}
-          <button
-            type="button"
-            onClick={() => {
-              setCreateModalDate(currentDate);
-              setCreateModalHour(new Date().getHours() + 1);
-              setIsCreateOpen(true);
-            }}
-            className="hidden sm:flex items-center gap-1.5 py-1.5 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-sm active:scale-95 transition"
-          >
-            <Plus className="size-3.5 stroke-[2.5]" />
-            <span>New Task</span>
-          </button>
-
-          {/* Download Mobile APK Button */}
-          <a
-            href="/autotask.apk"
-            download="AutoTask.apk"
-            className="flex items-center gap-1.5 py-1 px-2 sm:py-1.5 sm:px-2.5 rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-100 text-[11px] sm:text-xs font-semibold text-sky-700 transition"
-            title="Download Android APK"
-          >
-            <Smartphone className="size-3.5 text-sky-600" />
-            <span className="hidden lg:inline">APK</span>
-          </a>
-
-          {/* Desktop Connectors Button */}
-          <button
-            type="button"
-            onClick={() => setIsConnectorsOpen(true)}
-            className="hidden md:flex items-center gap-1.5 py-1.5 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 shadow-xs transition"
-            title="Connected Apps & Services"
-          >
-            <Boxes className="size-3.5 text-indigo-600" />
-            <span className="hidden xl:inline">Connectors</span>
-          </button>
-
-          {/* Desktop Engines Dropdown / Buttons */}
-          <div className="hidden lg:flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setIsNvidiaModalOpen(true)}
-              className="flex items-center gap-1 py-1.5 px-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-xs font-semibold text-emerald-800 transition"
-              title="Configure NVIDIA NIM Model"
-            >
-              <Cpu className="size-3.5 text-emerald-600" />
-              <span className="hidden xl:inline">{getNvidiaModel().split("/").pop()}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsOpencodeModalOpen(true)}
-              className="flex items-center gap-1 py-1.5 px-2 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-xs font-semibold text-purple-800 transition"
-              title="Configure OpenCode Engine"
-            >
-              <Code2 className="size-3.5 text-purple-600" />
-              <span className="hidden xl:inline">{getOpencodeModel().split("/").pop()}</span>
-            </button>
-          </div>
-
-          {/* User Sign Out */}
-          <button
-            type="button"
-            onClick={() => {
-              signOut();
-              onSignOut();
-            }}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition"
-            title={`Signed in as ${user.email} (Sign out)`}
-          >
-            <LogOut className="size-4" />
-          </button>
-        </div>
-      </header>
+          </header>
 
       {/* MOBILE HORIZONTAL DATE CAROUSEL STRIP */}
       {isMobile && viewMode !== "agenda" && (
@@ -619,33 +736,35 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
         ) : (
           /* HOURLY CALENDAR GRID (Day or Week) */
           <div className="flex-1 flex flex-col min-h-0 bg-white">
-            {/* Days Header */}
-            <div className="flex border-b border-slate-200 bg-slate-50/90 pl-12 sm:pl-16 pr-2 sm:pr-4 shrink-0">
-              {displayedDays.map((date, idx) => {
-                const today = isToday(date);
-                return (
-                  <div
-                    key={idx}
-                    className={`flex-1 py-2 sm:py-3 text-center border-l border-slate-200/60 ${
-                      today ? "bg-indigo-50/30" : ""
-                    }`}
-                  >
-                    <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                      {DAYS_OF_WEEK[date.getDay()]}
-                    </div>
+            {/* Days Header (Desktop Week / Day view) */}
+            {!isMobile && (
+              <div className="flex border-b border-slate-200 bg-slate-50/90 pl-12 sm:pl-16 pr-2 sm:pr-4 shrink-0">
+                {displayedDays.map((date, idx) => {
+                  const today = isToday(date);
+                  return (
                     <div
-                      className={`inline-flex items-center justify-center size-7 sm:size-8 rounded-full text-xs sm:text-sm font-bold mt-0.5 ${
-                        today
-                          ? "bg-indigo-600 text-white shadow-sm"
-                          : "text-slate-800"
+                      key={idx}
+                      className={`flex-1 py-2 sm:py-3 text-center border-l border-slate-200/60 ${
+                        today ? "bg-indigo-50/30" : ""
                       }`}
                     >
-                      {date.getDate()}
+                      <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                        {DAYS_OF_WEEK[date.getDay()]}
+                      </div>
+                      <div
+                        className={`inline-flex items-center justify-center size-7 sm:size-8 rounded-full text-xs sm:text-sm font-bold mt-0.5 ${
+                          today
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "text-slate-800"
+                        }`}
+                      >
+                        {date.getDate()}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Scrollable Hourly Timeline */}
             <div ref={scrollContainerRef} className="flex-1 overflow-y-auto relative flex autotask-scrollbar">
@@ -768,32 +887,41 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* MOBILE BOTTOM NAVIGATION BAR */}
       {isMobile && (
-        <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-4 py-2 flex items-center justify-between max-w-md mx-auto shadow-lg">
-          {/* Day View */}
+        <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-3 py-2 flex items-center justify-between max-w-md mx-auto shadow-lg">
+          {/* Calendar View */}
           <button
             type="button"
             onClick={() => setViewMode("day")}
-            className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition ${
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition ${
               viewMode === "day" ? "text-indigo-600 font-bold" : "text-slate-500 hover:text-slate-900"
             }`}
           >
             <CalendarIcon className="size-5" />
-            <span className="text-[10px]">Day</span>
+            <span className="text-[10px]">Calendar</span>
           </button>
 
-          {/* Agenda View */}
+          {/* Today's Tasks View */}
           <button
             type="button"
-            onClick={() => setViewMode("agenda")}
-            className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition ${
-              viewMode === "agenda" ? "text-indigo-600 font-bold" : "text-slate-500 hover:text-slate-900"
+            onClick={() => setViewMode("today-tasks")}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition relative ${
+              viewMode === "today-tasks" ? "text-indigo-600 font-bold" : "text-slate-500 hover:text-slate-900"
             }`}
           >
-            <ListTodo className="size-5" />
-            <span className="text-[10px]">Agenda</span>
+            <div className="relative">
+              <CheckSquare2 className="size-5" />
+              {todayTasksCount > 0 && (
+                <span className="absolute -top-1 -right-2 size-3.5 bg-indigo-600 text-white text-[9px] font-extrabold rounded-full flex items-center justify-center">
+                  {todayTasksCount}
+                </span>
+              )}
+            </div>
+            <span className="text-[10px]">Today</span>
           </button>
 
           {/* Center Elevated FAB */}
@@ -810,21 +938,23 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
             <Plus className="size-6 stroke-[2.5]" />
           </button>
 
-          {/* Connectors Modal */}
+          {/* Agenda View */}
           <button
             type="button"
-            onClick={() => setIsConnectorsOpen(true)}
-            className="flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl text-slate-500 hover:text-slate-900 transition"
+            onClick={() => setViewMode("agenda")}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl transition ${
+              viewMode === "agenda" ? "text-indigo-600 font-bold" : "text-slate-500 hover:text-slate-900"
+            }`}
           >
-            <Boxes className="size-5" />
-            <span className="text-[10px]">Connectors</span>
+            <ListTodo className="size-5" />
+            <span className="text-[10px]">Agenda</span>
           </button>
 
           {/* Engines Settings */}
           <button
             type="button"
             onClick={() => setIsEngineMenuOpen(true)}
-            className="flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl text-slate-500 hover:text-slate-900 transition"
+            className="flex flex-col items-center gap-0.5 py-1 px-2 rounded-xl text-slate-500 hover:text-slate-900 transition"
           >
             <Sliders className="size-5" />
             <span className="text-[10px]">Engines</span>
@@ -910,15 +1040,6 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
         }}
       />
 
-      {/* Task Detail Modal */}
-      <TaskDetailModal
-        task={selectedTask}
-        onClose={() => setSelectedTask(null)}
-        onDelete={(id) => {
-          deleteTask(id);
-          setTasks(getTasks());
-        }}
-      />
 
       {/* NVIDIA Key & Model Settings Modal */}
       <NvidiaSetupModal

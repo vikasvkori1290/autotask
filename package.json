@@ -86,6 +86,7 @@
   },
   "dependencies": {
     "@capacitor/core": "^8.5.2",
+    "@capacitor/local-notifications": "^8.3.1",
     "@clack/prompts": "1.7.0",
     "@hpke/core": "1.9.0",
     "@trycua/cua-driver": "0.28.2",

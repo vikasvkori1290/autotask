@@ -368,7 +368,114 @@ export function createAutotaskRoutes(): RouteHandler {
       }
     }
 
-    // 5. Validate NVIDIA API Key
+    // =============================================
+    // TASK SYNC API — Cross-device task management
+    // =============================================
+
+    // Helper: Authenticate user from token header or body
+    const authenticateUser = async () => {
+      let token = "";
+      if (req.headers.authorization) {
+        token = req.headers.authorization.replace(/^Bearer\s+/i, "").trim();
+      }
+      if (!token) return null;
+      return dbService.validateSession(token);
+    };
+
+    // 5a. GET /api/autotask/tasks — Fetch all tasks for authenticated user
+    if (path === "/api/autotask/tasks" && method === "GET") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+
+        const tasks = await dbService.getTasksByUser(user.id);
+        return json(res, 200, { ok: true, tasks });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 5b. POST /api/autotask/tasks — Create or upsert a single task
+    if (path === "/api/autotask/tasks" && method === "POST") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+
+        const body = await getJsonBody(req, readBody);
+        const task = body.task;
+        if (!task || !task.id) {
+          return json(res, 400, { ok: false, error: "Task with id is required." });
+        }
+
+        // Ensure task belongs to this user
+        task.userId = user.id;
+        task.updatedAt = task.updatedAt || Date.now();
+
+        const saved = await dbService.upsertTask(task);
+        return json(res, 200, { ok: true, task: saved });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 5c. POST /api/autotask/tasks/sync — Bulk sync: merge client tasks with server
+    if (path === "/api/autotask/tasks/sync" && method === "POST") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+
+        const body = await getJsonBody(req, readBody);
+        const clientTasks: any[] = Array.isArray(body.tasks) ? body.tasks : [];
+        const deletedIds: string[] = Array.isArray(body.deletedIds) ? body.deletedIds : [];
+
+        // Get current server tasks
+        const serverTasks = await dbService.getTasksByUser(user.id);
+        const serverMap = new Map(serverTasks.map((t) => [t.id, t]));
+
+        // Process deletions
+        for (const delId of deletedIds) {
+          await dbService.deleteTaskById(delId, user.id);
+          serverMap.delete(delId);
+        }
+
+        // Merge: client wins if updatedAt is newer, server wins otherwise
+        for (const clientTask of clientTasks) {
+          if (!clientTask.id) continue;
+          clientTask.userId = user.id;
+          clientTask.updatedAt = clientTask.updatedAt || Date.now();
+
+          const serverTask = serverMap.get(clientTask.id);
+          if (!serverTask || clientTask.updatedAt >= (serverTask.updatedAt || 0)) {
+            await dbService.upsertTask(clientTask);
+            serverMap.set(clientTask.id, clientTask);
+          }
+        }
+
+        // Return full merged task list
+        const mergedTasks = await dbService.getTasksByUser(user.id);
+        return json(res, 200, { ok: true, tasks: mergedTasks });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 5d. DELETE /api/autotask/tasks/:id — Delete a specific task
+    if (path.startsWith("/api/autotask/tasks/") && method === "DELETE") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+
+        const taskId = path.replace("/api/autotask/tasks/", "");
+        if (!taskId || taskId === "sync") return json(res, 400, { ok: false, error: "Task ID required." });
+
+        const deleted = await dbService.deleteTaskById(taskId, user.id);
+        return json(res, 200, { ok: true, deleted });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 6. Validate NVIDIA API Key
     if (path === "/api/autotask/validate-key" && method === "POST") {
       try {
         const body = await getJsonBody(req, readBody);

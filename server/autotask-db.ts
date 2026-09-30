@@ -1,7 +1,32 @@
 import { MongoClient, type Db } from "mongodb";
 import { scryptSync, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+
+// Load .env from project root into process.env (server-side only)
+try {
+  const envPath = resolve(process.cwd(), ".env");
+  if (existsSync(envPath)) {
+    const envContent = readFileSync(envPath, "utf-8");
+    for (const line of envContent.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      // Strip surrounding quotes
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (!process.env[key]) {
+        process.env[key] = val;
+      }
+    }
+  }
+} catch {
+  // silently ignore .env loading errors
+}
 
 export interface DbUser {
   id: string;
@@ -20,12 +45,48 @@ export interface DbSession {
   expiresAt: number;
 }
 
+export interface DbTaskSource {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface DbTaskResult {
+  summary: string;
+  sources: DbTaskSource[];
+  completedAt: number;
+  model: string;
+  engine?: "nvidia" | "opencode";
+  runner?: "cli" | "api" | "fallback";
+}
+
+export interface DbTask {
+  id: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  targetTime: number;
+  recurrence: "once" | "daily";
+  engine?: "nvidia" | "opencode";
+  model?: string;
+  status: "queued" | "researching" | "ready" | "delivered" | "failed";
+  createdAt: number;
+  updatedAt: number;
+  readyAt?: number;
+  deliveredAt?: number;
+  result?: DbTaskResult;
+  error?: string;
+  notifiedReady?: boolean;
+  notifiedDelivered?: boolean;
+}
+
 const FALLBACK_DIR = join(process.cwd(), ".data");
 const FALLBACK_FILE = join(FALLBACK_DIR, "autotask-db.json");
 
 interface FallbackDb {
   users: DbUser[];
   sessions: DbSession[];
+  tasks: DbTask[];
 }
 
 function loadFallbackDb(): FallbackDb {
@@ -35,12 +96,13 @@ function loadFallbackDb(): FallbackDb {
       return {
         users: data.users || [],
         sessions: data.sessions || [],
+        tasks: data.tasks || [],
       };
     }
   } catch (err) {
     console.error("[Autotask DB] Error loading fallback DB:", err);
   }
-  return { users: [], sessions: [] };
+  return { users: [], sessions: [], tasks: [] };
 }
 
 function saveFallbackDb(db: FallbackDb): void {
@@ -86,6 +148,8 @@ class AutotaskDatabase {
       // Ensure indexes
       await this.db.collection("users").createIndex({ email: 1 }, { unique: true });
       await this.db.collection("sessions").createIndex({ token: 1 }, { unique: true });
+      await this.db.collection("tasks").createIndex({ userId: 1 });
+      await this.db.collection("tasks").createIndex({ id: 1 }, { unique: true });
 
       // Migrate any fallback users to MongoDB if newly connected
       if (this.fallbackMemory.users.length > 0) {
@@ -230,6 +294,77 @@ class AutotaskDatabase {
     this.fallbackMemory = loadFallbackDb();
     this.fallbackMemory.sessions = this.fallbackMemory.sessions.filter((s) => s.token !== token);
     saveFallbackDb(this.fallbackMemory);
+  }
+
+  // =============================================
+  // TASK CRUD (per-user, synced across devices)
+  // =============================================
+
+  public async getTasksByUser(userId: string): Promise<DbTask[]> {
+    if (this.isConnected && this.db) {
+      try {
+        return await this.db.collection<DbTask>("tasks").find({ userId }).sort({ targetTime: 1 }).toArray();
+      } catch (err) {
+        console.error("[Autotask DB] getTasksByUser error:", err);
+      }
+    }
+    this.fallbackMemory = loadFallbackDb();
+    return this.fallbackMemory.tasks.filter((t) => t.userId === userId);
+  }
+
+  public async upsertTask(task: DbTask): Promise<DbTask> {
+    task.updatedAt = Date.now();
+
+    if (this.isConnected && this.db) {
+      try {
+        await this.db.collection("tasks").updateOne(
+          { id: task.id },
+          { $set: task },
+          { upsert: true }
+        );
+      } catch (err) {
+        console.error("[Autotask DB] upsertTask error:", err);
+      }
+    }
+
+    this.fallbackMemory = loadFallbackDb();
+    const idx = this.fallbackMemory.tasks.findIndex((t) => t.id === task.id);
+    if (idx >= 0) {
+      this.fallbackMemory.tasks[idx] = task;
+    } else {
+      this.fallbackMemory.tasks.push(task);
+    }
+    saveFallbackDb(this.fallbackMemory);
+    return task;
+  }
+
+  public async upsertTasks(tasks: DbTask[]): Promise<void> {
+    const now = Date.now();
+    for (const task of tasks) {
+      task.updatedAt = task.updatedAt || now;
+      await this.upsertTask(task);
+    }
+  }
+
+  public async deleteTaskById(taskId: string, userId: string): Promise<boolean> {
+    let deleted = false;
+    if (this.isConnected && this.db) {
+      try {
+        const result = await this.db.collection("tasks").deleteOne({ id: taskId, userId });
+        deleted = (result.deletedCount ?? 0) > 0;
+      } catch (err) {
+        console.error("[Autotask DB] deleteTaskById error:", err);
+      }
+    }
+
+    this.fallbackMemory = loadFallbackDb();
+    const before = this.fallbackMemory.tasks.length;
+    this.fallbackMemory.tasks = this.fallbackMemory.tasks.filter(
+      (t) => !(t.id === taskId && t.userId === userId)
+    );
+    if (this.fallbackMemory.tasks.length < before) deleted = true;
+    saveFallbackDb(this.fallbackMemory);
+    return deleted;
   }
 }
 

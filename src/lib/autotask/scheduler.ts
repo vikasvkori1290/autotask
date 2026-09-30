@@ -7,6 +7,8 @@ import {
   getOpencodeEndpoint,
   getOpencodeRunner,
 } from "./settings.ts";
+import { sendTaskNotification } from "./notifications.ts";
+import { getSessionToken, getCurrentUser } from "./auth.ts";
 
 export interface SearchSource {
   title: string;
@@ -25,6 +27,7 @@ export interface TaskResult {
 
 export interface AutoTask {
   id: string;
+  userId?: string;
   title: string;
   prompt: string;
   targetTime: number; // Unix timestamp in ms
@@ -33,13 +36,21 @@ export interface AutoTask {
   model?: string;
   status: "queued" | "researching" | "ready" | "delivered" | "failed";
   createdAt: number;
+  updatedAt: number;
   readyAt?: number;
   deliveredAt?: number;
   result?: TaskResult;
   error?: string;
+  notifiedReady?: boolean;
+  notifiedDelivered?: boolean;
 }
 
 const TASKS_STORAGE = "autotask_calendar_tasks";
+const DELETED_IDS_STORAGE = "autotask_deleted_ids";
+
+// =============================================
+// LOCAL STORAGE LAYER (offline cache)
+// =============================================
 
 export function getTasks(): AutoTask[] {
   try {
@@ -58,6 +69,116 @@ export function saveTasks(tasks: AutoTask[]): void {
   }
 }
 
+function getDeletedIds(): string[] {
+  try {
+    const raw = localStorage.getItem(DELETED_IDS_STORAGE);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addDeletedId(id: string): void {
+  const ids = getDeletedIds();
+  if (!ids.includes(id)) {
+    ids.push(id);
+    localStorage.setItem(DELETED_IDS_STORAGE, JSON.stringify(ids));
+  }
+}
+
+function clearDeletedIds(): void {
+  localStorage.removeItem(DELETED_IDS_STORAGE);
+}
+
+// =============================================
+// SERVER SYNC LAYER
+// =============================================
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getSessionToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+/**
+ * Sync local tasks with server.
+ * - Sends all local tasks + deletedIds to server
+ * - Server merges by updatedAt timestamp
+ * - Returns authoritative merged list
+ * - Updates localStorage with server response
+ */
+export async function syncTasksWithServer(): Promise<AutoTask[]> {
+  const token = getSessionToken();
+  if (!token) return getTasks(); // Not logged in, use local only
+
+  try {
+    const localTasks = getTasks();
+    const deletedIds = getDeletedIds();
+
+    const res = await fetch("/api/autotask/tasks/sync", {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ tasks: localTasks, deletedIds }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.tasks)) {
+        saveTasks(data.tasks);
+        clearDeletedIds();
+        return data.tasks;
+      }
+    }
+  } catch (err) {
+    console.debug("[Autotask Sync] Server unreachable, using local cache:", err);
+  }
+
+  return getTasks();
+}
+
+/**
+ * Push a single task update to the server (fire-and-forget with local cache)
+ */
+async function pushTaskToServer(task: AutoTask): Promise<void> {
+  const token = getSessionToken();
+  if (!token) return;
+
+  try {
+    await fetch("/api/autotask/tasks", {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ task }),
+    });
+  } catch {
+    // Server unreachable — local cache is the fallback
+  }
+}
+
+/**
+ * Push a task deletion to the server
+ */
+async function pushDeleteToServer(taskId: string): Promise<void> {
+  const token = getSessionToken();
+  if (!token) return;
+
+  try {
+    await fetch(`/api/autotask/tasks/${taskId}`, {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    });
+  } catch {
+    // Track deletion for next sync
+    addDeletedId(taskId);
+  }
+}
+
+// =============================================
+// PUBLIC TASK CRUD (synced)
+// =============================================
+
 export function addTask(
   prompt: string,
   targetTime: number,
@@ -68,9 +189,11 @@ export function addTask(
 ): AutoTask {
   const cleanPrompt = prompt.trim();
   const title = customTitle || (cleanPrompt.length > 40 ? cleanPrompt.slice(0, 37) + "..." : cleanPrompt);
+  const user = getCurrentUser();
 
   const newTask: AutoTask = {
     id: "task_" + Math.random().toString(36).slice(2, 10),
+    userId: user?.id,
     title,
     prompt: cleanPrompt,
     targetTime,
@@ -79,17 +202,25 @@ export function addTask(
     model,
     status: "queued",
     createdAt: Date.now(),
+    updatedAt: Date.now(),
   };
 
   const current = getTasks();
   current.push(newTask);
   saveTasks(current);
+
+  // Async push to server
+  void pushTaskToServer(newTask);
+
   return newTask;
 }
 
 export function deleteTask(id: string): void {
   const current = getTasks().filter((t) => t.id !== id);
   saveTasks(current);
+
+  // Async push to server
+  void pushDeleteToServer(id);
 }
 
 /**
@@ -131,9 +262,11 @@ let isRunnerExecuting = false;
  * - Inspects tasks and executes research in the background immediately
  * - Delivers ready tasks the exact moment their target time is reached
  * - Rolls over daily recurring tasks automatically
+ * - Syncs with server periodically for cross-device consistency
  */
 export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): () => void {
   let active = true;
+  let syncCounter = 0;
 
   const tick = async () => {
     if (!active) return;
@@ -141,22 +274,38 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
     let hasChanges = false;
     const now = Date.now();
 
+    // Periodic server sync every ~30 seconds (10 ticks × 3s interval)
+    syncCounter++;
+    if (syncCounter >= 10) {
+      syncCounter = 0;
+      try {
+        const synced = await syncTasksWithServer();
+        if (synced.length > 0 || tasks.length > 0) {
+          tasks = synced;
+          onUpdate([...tasks]);
+        }
+      } catch {
+        // sync failed, continue with local
+      }
+    }
+
     // 1. Check for tasks ready to be delivered
     for (const task of tasks) {
       if (task.status === "ready" && now >= task.targetTime) {
         task.status = "delivered";
         task.deliveredAt = now;
+        task.updatedAt = now;
         hasChanges = true;
         playDeliveryChime();
 
-        // Browser desktop notification if permitted
-        if ("Notification" in window && Notification.permission === "granted") {
-          const engineLabel = task.engine === "opencode" ? "OpenCode" : "NVIDIA NIM";
-          new Notification(`AutoTask Delivered [${engineLabel}]: ${task.title}`, {
-            body: `Your scheduled task for ${new Date(task.targetTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} is ready to review.`,
-            icon: "/favicon.ico",
-          });
+        // Dispatch notification (Capacitor mobile + Web desktop)
+        if (!task.notifiedDelivered) {
+          void sendTaskNotification(task, "delivered");
+          task.notifiedDelivered = true;
         }
+
+        // Push status update to server
+        void pushTaskToServer(task);
 
         // If daily, schedule the next iteration for tomorrow at the same time
         if (task.recurrence === "daily") {
@@ -167,6 +316,7 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
 
           const dailyNext: AutoTask = {
             id: "task_" + Math.random().toString(36).slice(2, 10),
+            userId: task.userId,
             title: task.title,
             prompt: task.prompt,
             targetTime: nextTarget,
@@ -175,8 +325,10 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             model: task.model,
             status: "queued",
             createdAt: now,
+            updatedAt: now,
           };
           tasks.push(dailyNext);
+          void pushTaskToServer(dailyNext);
         }
       }
     }
@@ -190,8 +342,10 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
       if (taskEngine === "opencode") {
         isRunnerExecuting = true;
         queuedTask.status = "researching";
+        queuedTask.updatedAt = Date.now();
         saveTasks(tasks);
         onUpdate([...tasks]);
+        void pushTaskToServer(queuedTask);
 
         const opencodeKey = getOpencodeApiKey();
         const opencodeModel = queuedTask.model || getOpencodeModel();
@@ -238,13 +392,20 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
           if (result) {
             target.status = "ready";
             target.readyAt = Date.now();
+            target.updatedAt = Date.now();
             target.result = result;
             target.error = undefined;
+            if (!target.notifiedReady) {
+              void sendTaskNotification(target, "completed");
+              target.notifiedReady = true;
+            }
           } else {
             target.status = "failed";
+            target.updatedAt = Date.now();
             target.error = executionError || "Failed to execute OpenCode task.";
           }
           hasChanges = true;
+          void pushTaskToServer(target);
         }
 
         isRunnerExecuting = false;
@@ -254,8 +415,10 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         if (apiKey) {
           isRunnerExecuting = true;
           queuedTask.status = "researching";
+          queuedTask.updatedAt = Date.now();
           saveTasks(tasks);
           onUpdate([...tasks]);
+          void pushTaskToServer(queuedTask);
 
           const model = queuedTask.model || getNvidiaModel();
           let result: TaskResult | null = null;
@@ -301,13 +464,20 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             if (result) {
               target.status = "ready";
               target.readyAt = Date.now();
+              target.updatedAt = Date.now();
               target.result = result;
               target.error = undefined;
+              if (!target.notifiedReady) {
+                void sendTaskNotification(target, "completed");
+                target.notifiedReady = true;
+              }
             } else {
               target.status = "failed";
+              target.updatedAt = Date.now();
               target.error = executionError || "Failed to execute task.";
             }
             hasChanges = true;
+            void pushTaskToServer(target);
           }
 
           isRunnerExecuting = false;
@@ -322,7 +492,14 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
   };
 
   const intervalId = setInterval(tick, 3000);
-  void tick();
+
+  // Do an initial server sync immediately on startup
+  void syncTasksWithServer().then((synced) => {
+    if (synced.length > 0) {
+      onUpdate([...synced]);
+    }
+    void tick();
+  });
 
   return () => {
     active = false;
