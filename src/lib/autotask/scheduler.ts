@@ -1,4 +1,4 @@
-import { getNvidiaApiKey, getNvidiaModel } from "./settings.ts";
+import { getNvidiaApiKey, getNvidiaModel, setNvidiaModel } from "./settings.ts";
 
 export interface SearchSource {
   title: string;
@@ -197,6 +197,9 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
               completedAt: data.completedAt || Date.now(),
               model: data.model || model,
             };
+            if (data.model && data.model !== model) {
+              setNvidiaModel(data.model);
+            }
           } else {
             executionError = (data && data.error) || `Execution failed (HTTP ${res.status})`;
           }

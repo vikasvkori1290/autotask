@@ -119,7 +119,10 @@ export async function handleAutotaskRequest(req: IncomingMessage, res: ServerRes
         return true;
       }
 
-      sendJson(res, 200, { ok: true });
+      const probeData = (await probe.json()) as { data?: Array<{ id: string }> };
+      const models = Array.isArray(probeData?.data) ? probeData.data.map((m) => m.id) : [];
+
+      sendJson(res, 200, { ok: true, models });
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
@@ -133,7 +136,7 @@ export async function handleAutotaskRequest(req: IncomingMessage, res: ServerRes
     }
     const payload = body ? JSON.parse(body) : {};
     const apiKey = String(payload.apiKey || "").trim();
-    const model = String(payload.model || "nvidia/llama-3.1-nemotron-70b-instruct").trim();
+    const model = String(payload.model || "").trim();
     const prompt = String(payload.prompt || "").trim();
     const searchEnabled = payload.searchEnabled !== false;
 
@@ -175,20 +178,76 @@ Formatting instructions:
         ? `TASK INSTRUCTIONS:\n${prompt}\n\nLATEST REAL-TIME WEB SEARCH DATA:\n${searchContext}\n\nPlease synthesize the information above into a complete, thorough, beautifully formatted briefing.`
         : `TASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
 
-      // Fallback model cascade in case chosen model is deprecated or unavailable
-      const modelsToTry = [
-        model,
+      // 1. Dynamically query available models for this specific NVIDIA account
+      let accountModels: string[] = [];
+      try {
+        const probe = await fetch("https://integrate.api.nvidia.com/v1/models", {
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Accept": "application/json",
+          },
+        });
+        if (probe.ok) {
+          const probeData = (await probe.json()) as { data?: Array<{ id: string }> };
+          if (Array.isArray(probeData?.data)) {
+            accountModels = probeData.data.map((m) => m.id);
+            console.log(`[Autotask] Available models for account (${accountModels.length}):`, accountModels);
+          }
+        }
+      } catch (probeErr) {
+        console.warn("[Autotask] Could not list account models:", probeErr);
+      }
+
+      // 2. Build prioritized candidate list:
+      // User's chosen model first, then account's available instruct/chat models, then defaults
+      const modelsToTry: string[] = [];
+      if (model && (accountModels.length === 0 || accountModels.includes(model))) {
+        modelsToTry.push(model);
+      }
+
+      if (accountModels.length > 0) {
+        const ranked = [...accountModels].sort((a, b) => {
+          const score = (id: string) => {
+            let s = 0;
+            const lower = id.toLowerCase();
+            if (lower.includes("instruct")) s += 10;
+            if (lower.includes("chat")) s += 8;
+            if (lower.includes("llama-3")) s += 6;
+            if (lower.includes("nemotron")) s += 5;
+            if (lower.includes("mistral")) s += 4;
+            if (lower.includes("qwen")) s += 3;
+            if (lower.includes("gemma")) s += 2;
+            return s;
+          };
+          return score(b) - score(a);
+        });
+
+        for (const m of ranked) {
+          if (!modelsToTry.includes(m)) {
+            modelsToTry.push(m);
+          }
+        }
+      }
+
+      const defaults = [
         "nvidia/llama-3.1-nemotron-70b-instruct",
         "mistralai/mistral-large-2-instruct",
         "mistralai/mistral-7b-instruct-v0.3",
-      ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
+        "nvidia/nemotron-4-340b-instruct",
+      ];
+      for (const d of defaults) {
+        if (!modelsToTry.includes(d)) {
+          modelsToTry.push(d);
+        }
+      }
 
       let lastErrorText = "";
-      let activeModelUsed = model;
+      let activeModelUsed = model || modelsToTry[0];
       let nvData: { choices?: Array<{ message?: { content?: string } }> } | null = null;
 
       for (const currentModel of modelsToTry) {
         try {
+          console.log(`[Autotask] Attempting execution with model: ${currentModel}`);
           const nvResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -210,15 +269,17 @@ Formatting instructions:
           if (nvResponse.ok) {
             nvData = (await nvResponse.json()) as { choices?: Array<{ message?: { content?: string } }> };
             activeModelUsed = currentModel;
+            console.log(`[Autotask] Successfully generated briefing with: ${currentModel}`);
             break;
           } else {
             const errText = await nvResponse.text();
             lastErrorText = `NVIDIA API error (${nvResponse.status}) for ${currentModel}: ${errText.slice(0, 260)}`;
-            // If model is retired (410) or missing (404), fall back to next model
+            console.warn(`[Autotask] Model ${currentModel} returned ${nvResponse.status}: ${errText.slice(0, 160)}`);
+            // If model is retired (410) or missing/unassigned (404), fall back to next model
             if (nvResponse.status === 410 || nvResponse.status === 404) {
               continue;
             }
-            // For auth errors (401/403) or rate limits (429), fail immediately with helpful message
+            // For auth errors (401/403) or rate limits (429), fail immediately
             break;
           }
         } catch (fetchErr) {
