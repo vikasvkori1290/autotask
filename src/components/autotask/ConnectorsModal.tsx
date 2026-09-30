@@ -78,7 +78,7 @@ export function ConnectorsModal({
     {
       id: "opencode",
       name: "OpenCode AI Engine",
-      description: "OpenCode harness supporting Zen, Go, OpenRouter, and community AI models.",
+      description: "OpenCode harness supporting local CLI binary, Zen, Go, and community models.",
       category: "ai",
       icon: Code2,
       status: opencodeKey ? "connected" : "ready",
@@ -171,17 +171,17 @@ export function ConnectorsModal({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-4xl max-h-[90vh] bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="relative w-full max-w-4xl max-h-[90vh] bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden flex flex-col text-slate-900">
         {/* Header */}
-        <div className="p-4 sm:p-6 border-b border-neutral-800 flex items-center justify-between bg-neutral-900/80">
+        <div className="p-4 sm:p-6 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
           <div className="flex items-center gap-3">
-            <div className="size-10 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400">
+            <div className="size-10 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600">
               <Boxes className="size-5" />
             </div>
             <div>
-              <h3 className="font-bold text-white text-lg sm:text-xl">Connected Apps &amp; Services</h3>
-              <p className="text-xs text-neutral-400">
+              <h3 className="font-bold text-slate-900 text-lg sm:text-xl">Connected Apps &amp; Services</h3>
+              <p className="text-xs text-slate-500">
                 Seamless connectors powering autonomous AI background executions
               </p>
             </div>
@@ -189,14 +189,14 @@ export function ConnectorsModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 transition"
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
           >
             <X className="size-5" />
           </button>
         </div>
 
         {/* Filter Tabs */}
-        <div className="px-4 sm:px-6 pt-3 pb-2 border-b border-neutral-800/60 flex items-center gap-2 overflow-x-auto text-xs font-medium">
+        <div className="px-4 sm:px-6 pt-3 pb-2 border-b border-slate-200 flex items-center gap-2 overflow-x-auto text-xs font-semibold">
           {[
             { id: "all", label: "All Connectors" },
             { id: "ai", label: "AI & Models" },
@@ -210,8 +210,8 @@ export function ConnectorsModal({
               onClick={() => setActiveCategory(tab.id)}
               className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition ${
                 activeCategory === tab.id
-                  ? "bg-teal-500/15 text-teal-300 border border-teal-500/30"
-                  : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60"
+                  ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
               }`}
             >
               {tab.label}
@@ -229,31 +229,31 @@ export function ConnectorsModal({
             return (
               <div
                 key={item.id}
-                className="p-4 rounded-2xl bg-neutral-950/60 border border-neutral-800 hover:border-neutral-700 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                className="p-4 rounded-2xl bg-white border border-slate-200 hover:border-slate-300 hover:shadow-sm transition flex flex-col sm:flex-row sm:items-center justify-between gap-4"
               >
                 <div className="flex items-start gap-3.5">
-                  <div className="size-11 rounded-xl bg-neutral-800/80 border border-neutral-700/60 flex items-center justify-center shrink-0 text-neutral-300">
-                    <Icon className="size-5 text-teal-400" />
+                  <div className="size-11 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0 text-slate-700">
+                    <Icon className="size-5 text-indigo-600" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="font-semibold text-white text-sm sm:text-base">{item.name}</h4>
+                      <h4 className="font-bold text-slate-900 text-sm sm:text-base">{item.name}</h4>
                       {isConnected && (
-                        <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-medium">
+                        <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
                           <CheckCircle2 className="size-3" /> Connected
                         </span>
                       )}
                       {isReady && (
-                        <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-medium">
+                        <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-semibold">
                           <RefreshCw className="size-3" /> Ready
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-neutral-400 mt-1 max-w-xl leading-relaxed">
+                    <p className="text-xs text-slate-500 mt-1 max-w-xl leading-relaxed">
                       {item.description}
                     </p>
                     {item.details && (
-                      <div className="mt-2 text-[11px] font-mono text-neutral-500 bg-neutral-900/90 px-2 py-0.5 rounded-md inline-block">
+                      <div className="mt-2 text-[11px] font-mono text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-md inline-block border border-slate-200">
                         {item.details}
                       </div>
                     )}
@@ -264,10 +264,10 @@ export function ConnectorsModal({
                   <button
                     type="button"
                     onClick={item.onClick}
-                    className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white border border-neutral-700 transition flex items-center justify-center gap-1.5"
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-xs transition flex items-center justify-center gap-1.5"
                   >
                     {item.actionText}
-                    <ExternalLink className="size-3 text-neutral-400" />
+                    <ExternalLink className="size-3 text-slate-400" />
                   </button>
                 </div>
               </div>
@@ -276,12 +276,12 @@ export function ConnectorsModal({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-neutral-800 flex items-center justify-between bg-neutral-900/60 text-xs text-neutral-400">
-          <span>Active background scheduler: <strong>Online</strong></span>
+        <div className="p-4 border-t border-slate-200 flex items-center justify-between bg-slate-50/70 text-xs text-slate-500">
+          <span>Active background scheduler: <strong className="text-slate-700 font-bold">Online</strong></span>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 transition"
+            className="px-4 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold transition"
           >
             Done
           </button>
@@ -289,8 +289,8 @@ export function ConnectorsModal({
 
         {/* Toast Notification */}
         {toastMessage && (
-          <div className="absolute bottom-5 right-5 bg-teal-600 text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-medium animate-in slide-in-from-bottom duration-200 flex items-center gap-2">
-            <CheckCircle2 className="size-4" />
+          <div className="absolute bottom-5 right-5 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-semibold animate-in slide-in-from-bottom duration-200 flex items-center gap-2">
+            <CheckCircle2 className="size-4 text-emerald-400" />
             {toastMessage}
           </div>
         )}

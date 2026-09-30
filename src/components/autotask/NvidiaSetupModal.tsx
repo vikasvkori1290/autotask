@@ -53,16 +53,16 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="relative w-full max-w-lg bg-neutral-900 border border-neutral-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-neutral-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="relative w-full max-w-lg bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-2xl text-slate-900">
         {/* Header */}
         <div className="flex items-start gap-4 mb-6">
-          <div className="size-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+          <div className="size-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 shrink-0">
             <Cpu className="size-6" />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white">NVIDIA NIM Configuration</h2>
-            <p className="text-xs text-neutral-400 mt-1">
+            <h2 className="text-xl font-bold text-slate-900">NVIDIA NIM Configuration</h2>
+            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
               Connect your NVIDIA API key to power autonomous research and scheduled task summaries.
             </p>
           </div>
@@ -72,15 +72,15 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
           {/* Key input */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
-                <KeyRound className="size-3.5 text-emerald-400" />
+              <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                <KeyRound className="size-3.5 text-emerald-600" />
                 NVIDIA API Key
               </label>
               <a
                 href="https://build.nvidia.com"
                 target="_blank"
                 rel="noreferrer"
-                className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition"
+                className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold flex items-center gap-1 transition"
               >
                 <span>Get free key at build.nvidia.com</span>
                 <ExternalLink className="size-3" />
@@ -95,13 +95,13 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
                 setTestResult(null);
               }}
               placeholder="nvapi-..."
-              className="w-full bg-neutral-950/70 border border-neutral-800 focus:border-emerald-500 rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-neutral-600 outline-none transition font-mono"
+              className="w-full bg-slate-50/70 border border-slate-200 focus:border-emerald-600 focus:bg-white rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition font-mono"
             />
           </div>
 
           {/* Model selection */}
           <div>
-            <label className="block text-xs font-semibold text-neutral-300 mb-2">
+            <label className="block text-xs font-semibold text-slate-700 mb-2">
               Select Execution Engine
             </label>
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
@@ -111,8 +111,8 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
                   onClick={() => setModel(model.id)}
                   className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${
                     selectedModel === model.id
-                      ? "bg-emerald-500/10 border-emerald-500/50 text-white"
-                      : "bg-neutral-950/40 border-neutral-800/80 hover:bg-neutral-800/40 text-neutral-400"
+                      ? "bg-emerald-50 border-emerald-300 text-emerald-950 shadow-xs"
+                      : "bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-600"
                   }`}
                 >
                   <input
@@ -120,16 +120,16 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
                     name="model"
                     checked={selectedModel === model.id}
                     onChange={() => setModel(model.id)}
-                    className="mt-1 accent-emerald-500"
+                    className="mt-1 accent-emerald-600"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-neutral-200">{model.name}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-neutral-800 text-emerald-400 font-medium border border-neutral-700">
+                      <span className="text-xs font-bold text-slate-900">{model.name}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold border border-emerald-200">
                         {model.badge}
                       </span>
                     </div>
-                    <p className="text-[11px] text-neutral-400 mt-0.5 leading-snug">{model.description}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">{model.description}</p>
                   </div>
                 </label>
               ))}
@@ -141,14 +141,14 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
             <div
               className={`flex items-start gap-2 p-3 rounded-xl text-xs border ${
                 testResult.ok
-                  ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
-                  : "bg-rose-500/10 border-rose-500/20 text-rose-300"
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  : "bg-rose-50 border-rose-200 text-rose-800"
               }`}
             >
               {testResult.ok ? (
-                <CheckCircle2 className="size-4 shrink-0 text-emerald-400 mt-0.5" />
+                <CheckCircle2 className="size-4 shrink-0 text-emerald-600 mt-0.5" />
               ) : (
-                <AlertCircle className="size-4 shrink-0 text-rose-400 mt-0.5" />
+                <AlertCircle className="size-4 shrink-0 text-rose-600 mt-0.5" />
               )}
               <span className="leading-snug">{testResult.msg}</span>
             </div>
@@ -160,9 +160,9 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
               type="button"
               onClick={handleTestKey}
               disabled={testing}
-              className="py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-xs font-semibold text-neutral-200 flex items-center gap-2 transition disabled:opacity-50"
+              className="py-2.5 px-4 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-2 transition disabled:opacity-50"
             >
-              {testing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-emerald-400" />}
+              {testing ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-emerald-600" />}
               <span>Test Connection</span>
             </button>
 
@@ -172,7 +172,7 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
               <button
                 type="button"
                 onClick={onClose}
-                className="py-2.5 px-4 rounded-xl bg-transparent hover:bg-neutral-800 text-xs font-medium text-neutral-400 hover:text-white transition"
+                className="py-2.5 px-4 rounded-xl bg-transparent hover:bg-slate-100 text-xs font-semibold text-slate-500 hover:text-slate-800 transition"
               >
                 Cancel
               </button>
@@ -180,9 +180,9 @@ export function NvidiaSetupModal({ isOpen, onSaved, canClose = false, onClose }:
 
             <button
               type="submit"
-              className="py-2.5 px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-neutral-950 text-xs font-bold shadow-lg shadow-emerald-500/20 active:scale-[0.99] transition"
+              className="py-2.5 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-md shadow-slate-900/10 active:scale-[0.99] transition"
             >
-              Save & Launch Calendar
+              Save &amp; Continue
             </button>
           </div>
         </form>
