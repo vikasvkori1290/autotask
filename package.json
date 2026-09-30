@@ -85,6 +85,7 @@
     "control-plane:dry-run": "pnpm --filter @openmausbot/control-plane dry-run"
   },
   "dependencies": {
+    "@capacitor/core": "^8.5.2",
     "@clack/prompts": "1.7.0",
     "@hpke/core": "1.9.0",
     "@trycua/cua-driver": "0.28.2",
@@ -112,6 +113,8 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
     "@tailwindcss/vite": "^4.1.11",
     "@types/node": "^26.2.0",
     "@types/qrcode-terminal": "0.12.2",

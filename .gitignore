@@ -43,3 +43,6 @@ deploy/podman/.env.*
 
 .data/
 
+
+*.apk
+android-legacy/
