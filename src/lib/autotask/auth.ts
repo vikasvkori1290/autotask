@@ -6,43 +6,7 @@ export interface AutotaskUser {
 }
 
 const STORAGE_KEY = "autotask_current_user";
-const USERS_DB_KEY = "autotask_users_db";
-
-interface StoredAccount {
-  id: string;
-  name: string;
-  email: string;
-  passwordHash: string;
-  createdAt: number;
-}
-
-// Simple fast hash for local storage verification
-function hashPassword(password: string): string {
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0;
-  }
-  return String(hash);
-}
-
-function getStoredAccounts(): StoredAccount[] {
-  try {
-    const raw = localStorage.getItem(USERS_DB_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredAccounts(accounts: StoredAccount[]): void {
-  try {
-    localStorage.setItem(USERS_DB_KEY, JSON.stringify(accounts));
-  } catch (err) {
-    console.error("Failed to save accounts to localStorage", err);
-  }
-}
+const TOKEN_KEY = "autotask_session_token";
 
 export function getCurrentUser(): AutotaskUser | null {
   try {
@@ -53,62 +17,128 @@ export function getCurrentUser(): AutotaskUser | null {
   }
 }
 
-export function signUp(name: string, email: string, password: string): { ok: boolean; error?: string; user?: AutotaskUser } {
+export function getSessionToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+
+export async function restoreSession(): Promise<AutotaskUser | null> {
+  const token = getSessionToken();
+  if (!token) return null;
+
+  try {
+    const res = await fetch("/api/autotask/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok && data.user) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.user));
+        return data.user;
+      }
+    }
+  } catch (err) {
+    console.debug("[Autotask] Session check offline fallback:", err);
+  }
+
+  // If server is offline or unreachable, retain cached user so user is not logged out
+  return getCurrentUser();
+}
+
+export async function signUp(
+  name: string,
+  email: string,
+  password: string
+): Promise<{ ok: boolean; code?: string; error?: string; user?: AutotaskUser }> {
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = name.trim();
+
   if (!cleanName) return { ok: false, error: "Please enter your name." };
   if (!cleanEmail || !cleanEmail.includes("@")) return { ok: false, error: "Please enter a valid email address." };
   if (!password || password.length < 4) return { ok: false, error: "Password must be at least 4 characters." };
 
-  const accounts = getStoredAccounts();
-  if (accounts.some((a) => a.email === cleanEmail)) {
-    return { ok: false, error: "An account with this email already exists on this device." };
+  try {
+    const res = await fetch("/api/autotask/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: cleanName, email: cleanEmail, password }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      if (data.user) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.user));
+      }
+      if (data.token) {
+        localStorage.setItem(TOKEN_KEY, data.token);
+      }
+      return { ok: true, user: data.user };
+    }
+
+    return {
+      ok: false,
+      code: data.code,
+      error: data.error || "Failed to create account.",
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Network error during sign up.",
+    };
   }
-
-  const user: StoredAccount = {
-    id: "usr_" + Math.random().toString(36).slice(2, 10),
-    name: cleanName,
-    email: cleanEmail,
-    passwordHash: hashPassword(password),
-    createdAt: Date.now(),
-  };
-
-  accounts.push(user);
-  saveStoredAccounts(accounts);
-
-  const sessionUser: AutotaskUser = {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    createdAt: user.createdAt,
-  };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionUser));
-  return { ok: true, user: sessionUser };
 }
 
-export function signIn(email: string, password: string): { ok: boolean; error?: string; user?: AutotaskUser } {
+export async function signIn(
+  email: string,
+  password: string
+): Promise<{ ok: boolean; code?: string; error?: string; user?: AutotaskUser }> {
   const cleanEmail = email.trim().toLowerCase();
-  const accounts = getStoredAccounts();
-  const account = accounts.find((a) => a.email === cleanEmail);
 
-  if (!account) {
-    return { ok: false, error: "Account not found. Please sign up first." };
+  if (!cleanEmail || !cleanEmail.includes("@")) return { ok: false, error: "Please enter a valid email address." };
+  if (!password) return { ok: false, error: "Please enter your password." };
+
+  try {
+    const res = await fetch("/api/autotask/auth/signin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: cleanEmail, password }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      if (data.user) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.user));
+      }
+      if (data.token) {
+        localStorage.setItem(TOKEN_KEY, data.token);
+      }
+      return { ok: true, user: data.user };
+    }
+
+    return {
+      ok: false,
+      code: data.code,
+      error: data.error || "Sign in failed.",
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Network error during sign in.",
+    };
   }
-
-  if (account.passwordHash !== hashPassword(password)) {
-    return { ok: false, error: "Incorrect password." };
-  }
-
-  const sessionUser: AutotaskUser = {
-    id: account.id,
-    name: account.name,
-    email: account.email,
-    createdAt: account.createdAt,
-  };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionUser));
-  return { ok: true, user: sessionUser };
 }
 
 export function signOut(): void {
+  const token = getSessionToken();
+  if (token) {
+    fetch("/api/autotask/auth/signout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    }).catch(() => {});
+  }
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(TOKEN_KEY);
 }

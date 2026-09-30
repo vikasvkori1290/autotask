@@ -1,4 +1,5 @@
 import { PASS, type RouteHandler } from "./table.ts";
+import { dbService } from "../autotask-db.ts";
 
 interface SearchResult {
   title: string;
@@ -73,7 +74,126 @@ async function performWebSearch(query: string, maxResults = 6): Promise<SearchRe
 
 export function createAutotaskRoutes(): RouteHandler {
   return async ({ req, res, path, method, json, readBody }) => {
-    // 1. Validate NVIDIA API Key
+    // 0. DB Status
+    if (path === "/api/autotask/db-status") {
+      return json(res, 200, { ok: true, ...dbService.getStatus() });
+    }
+
+    // 1. Auth: Sign Up (check existence, hash password, insert to MongoDB)
+    if (path === "/api/autotask/auth/signup" && method === "POST") {
+      try {
+        const raw = await readBody(req);
+        const body = raw ? JSON.parse(raw) : {};
+        const name = String(body.name || "").trim();
+        const email = String(body.email || "").trim().toLowerCase();
+        const password = String(body.password || "");
+
+        if (!name) return json(res, 400, { ok: false, error: "Name is required." });
+        if (!email || !email.includes("@")) return json(res, 400, { ok: false, error: "A valid email is required." });
+        if (!password || password.length < 4) return json(res, 400, { ok: false, error: "Password must be at least 4 characters." });
+
+        const existing = await dbService.findUserByEmail(email);
+        if (existing) {
+          return json(res, 400, {
+            ok: false,
+            code: "USER_EXISTS",
+            error: "An account with this email already exists. Please sign in instead.",
+          });
+        }
+
+        const { hash, salt } = dbService.hashPassword(password);
+        const user = await dbService.createUser(name, email, hash, salt);
+        const token = await dbService.createSession(user.id, user.email);
+
+        return json(res, 200, {
+          ok: true,
+          user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+          token,
+        });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 2. Auth: Sign In (check existence, verify password, issue session)
+    if (path === "/api/autotask/auth/signin" && method === "POST") {
+      try {
+        const raw = await readBody(req);
+        const body = raw ? JSON.parse(raw) : {};
+        const email = String(body.email || "").trim().toLowerCase();
+        const password = String(body.password || "");
+
+        if (!email || !password) return json(res, 400, { ok: false, error: "Email and password are required." });
+
+        const user = await dbService.findUserByEmail(email);
+        if (!user) {
+          return json(res, 404, {
+            ok: false,
+            code: "USER_NOT_FOUND",
+            error: "No account found with this email. Please sign up first.",
+          });
+        }
+
+        const valid = dbService.verifyPassword(password, user.passwordHash, user.salt);
+        if (!valid) {
+          return json(res, 401, {
+            ok: false,
+            code: "INVALID_PASSWORD",
+            error: "Incorrect password. Please try again.",
+          });
+        }
+
+        const token = await dbService.createSession(user.id, user.email);
+        return json(res, 200, {
+          ok: true,
+          user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+          token,
+        });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 3. Auth: Session Validation
+    if (path === "/api/autotask/auth/session") {
+      try {
+        let token = "";
+        if (method === "POST") {
+          const raw = await readBody(req);
+          const body = raw ? JSON.parse(raw) : {};
+          token = String(body.token || "").trim();
+        }
+        if (!token && req.headers.authorization) {
+          token = req.headers.authorization.replace(/^Bearer\s+/i, "").trim();
+        }
+        if (!token) return json(res, 401, { ok: false, error: "No token provided." });
+
+        const user = await dbService.validateSession(token);
+        if (!user) return json(res, 401, { ok: false, error: "Session invalid or expired." });
+
+        return json(res, 200, {
+          ok: true,
+          user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+        });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 4. Auth: Sign Out
+    if (path === "/api/autotask/auth/signout" && method === "POST") {
+      try {
+        const raw = await readBody(req);
+        const body = raw ? JSON.parse(raw) : {};
+        const token = String(body.token || "").trim();
+        if (token) await dbService.deleteSession(token);
+        return json(res, 200, { ok: true });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // 5. Validate NVIDIA API Key
     if (path === "/api/autotask/validate-key" && method === "POST") {
       try {
         const raw = await readBody(req);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { StoreProvider } from "@/state/store";
-import { getCurrentUser, type AutotaskUser } from "../../lib/autotask/auth";
+import { getCurrentUser, restoreSession, type AutotaskUser } from "../../lib/autotask/auth";
 import { getNvidiaApiKey } from "../../lib/autotask/settings";
 import { AuthGate } from "./AuthGate";
 import { NvidiaSetupModal } from "./NvidiaSetupModal";
@@ -11,7 +11,12 @@ export function AutotaskRoot() {
   const [hasNvidiaKey, setHasNvidiaKey] = useState<boolean>(() => Boolean(getNvidiaApiKey()));
 
   useEffect(() => {
-    setCurrentUser(getCurrentUser());
+    // Validate session with MongoDB / backend so the user is never asked to sign in again
+    restoreSession().then((user) => {
+      if (user) {
+        setCurrentUser(user);
+      }
+    });
     setHasNvidiaKey(Boolean(getNvidiaApiKey()));
   }, []);
 

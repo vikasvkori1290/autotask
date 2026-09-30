@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { dbService } from "./autotask-db.ts";
 
 interface SearchResult {
   title: string;
@@ -86,6 +87,163 @@ export async function handleAutotaskRequest(req: IncomingMessage, res: ServerRes
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.end();
+    return true;
+  }
+
+  // 0. DB Status
+  if (url === "/api/autotask/db-status" && (req.method === "GET" || req.method === "POST")) {
+    sendJson(res, 200, { ok: true, ...dbService.getStatus() });
+    return true;
+  }
+
+  // 1. Auth: Sign Up (checks if user exists, hashes password, saves to MongoDB)
+  if (url === "/api/autotask/auth/signup" && req.method === "POST") {
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+    }
+    const payload = body ? JSON.parse(body) : {};
+    const name = String(payload.name || "").trim();
+    const email = String(payload.email || "").trim().toLowerCase();
+    const password = String(payload.password || "");
+
+    if (!name) {
+      sendJson(res, 400, { ok: false, error: "Name is required." });
+      return true;
+    }
+    if (!email || !email.includes("@")) {
+      sendJson(res, 400, { ok: false, error: "A valid email is required." });
+      return true;
+    }
+    if (!password || password.length < 4) {
+      sendJson(res, 400, { ok: false, error: "Password must be at least 4 characters." });
+      return true;
+    }
+
+    try {
+      // Check if user already exists
+      const existing = await dbService.findUserByEmail(email);
+      if (existing) {
+        sendJson(res, 400, {
+          ok: false,
+          code: "USER_EXISTS",
+          error: "An account with this email already exists. Please sign in instead.",
+        });
+        return true;
+      }
+
+      // Hash password securely with scrypt
+      const { hash, salt } = dbService.hashPassword(password);
+      const user = await dbService.createUser(name, email, hash, salt);
+      const token = await dbService.createSession(user.id, user.email);
+
+      sendJson(res, 200, {
+        ok: true,
+        user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+        token,
+      });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  // 2. Auth: Sign In (checks existence, verifies password, generates session)
+  if (url === "/api/autotask/auth/signin" && req.method === "POST") {
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+    }
+    const payload = body ? JSON.parse(body) : {};
+    const email = String(payload.email || "").trim().toLowerCase();
+    const password = String(payload.password || "");
+
+    if (!email || !password) {
+      sendJson(res, 400, { ok: false, error: "Email and password are required." });
+      return true;
+    }
+
+    try {
+      const user = await dbService.findUserByEmail(email);
+      if (!user) {
+        sendJson(res, 404, {
+          ok: false,
+          code: "USER_NOT_FOUND",
+          error: "No account found with this email. Please sign up first.",
+        });
+        return true;
+      }
+
+      const valid = dbService.verifyPassword(password, user.passwordHash, user.salt);
+      if (!valid) {
+        sendJson(res, 401, {
+          ok: false,
+          code: "INVALID_PASSWORD",
+          error: "Incorrect password. Please try again.",
+        });
+        return true;
+      }
+
+      const token = await dbService.createSession(user.id, user.email);
+      sendJson(res, 200, {
+        ok: true,
+        user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+        token,
+      });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  // 3. Auth: Validate Session (for persistent login so user is never asked again)
+  if (url === "/api/autotask/auth/session" && (req.method === "POST" || req.method === "GET")) {
+    let token = "";
+    if (req.method === "POST") {
+      let body = "";
+      for await (const chunk of req) {
+        body += chunk;
+      }
+      const payload = body ? JSON.parse(body) : {};
+      token = String(payload.token || "").trim();
+    }
+    if (!token && req.headers.authorization) {
+      token = req.headers.authorization.replace(/^Bearer\s+/i, "").trim();
+    }
+
+    if (!token) {
+      sendJson(res, 401, { ok: false, error: "No token provided." });
+      return true;
+    }
+
+    try {
+      const user = await dbService.validateSession(token);
+      if (!user) {
+        sendJson(res, 401, { ok: false, error: "Session expired or invalid." });
+        return true;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+      });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  // 4. Auth: Sign Out
+  if (url === "/api/autotask/auth/signout" && req.method === "POST") {
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+    }
+    const payload = body ? JSON.parse(body) : {};
+    const token = String(payload.token || "").trim();
+    if (token) {
+      await dbService.deleteSession(token);
+    }
+    sendJson(res, 200, { ok: true });
     return true;
   }
 
