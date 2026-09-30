@@ -32,24 +32,59 @@ export const AVAILABLE_NVIDIA_MODELS: NvidiaModelOption[] = [
   },
 ];
 
-// OpenCode Models
+// OpenCode Models (both Local Binary CLI & API)
 export interface OpencodeModelOption {
   id: string;
   name: string;
   description: string;
   badge: string;
+  isCli?: boolean;
 }
 
 export const AVAILABLE_OPENCODE_MODELS: OpencodeModelOption[] = [
   {
-    id: "opencode/x-preview-f-free",
-    name: "OpenCode Zen · Ox Alpha",
-    description: "Built-in OpenCode community model with 1M context window and fast tool reasoning.",
-    badge: "Free / Built-in",
+    id: "opencode/space-bunny-free",
+    name: "Space Bunny Free",
+    description: "High-speed free model ready to run immediately through your local OpenCode CLI.",
+    badge: "Local CLI · Free",
+    isCli: true,
+  },
+  {
+    id: "opencode/nemotron-3.5-lightning-free",
+    name: "Nemotron 3.5 Lightning",
+    description: "Ultra-fast reasoning model powered by local OpenCode binary harness.",
+    badge: "Local CLI · Free",
+    isCli: true,
+  },
+  {
+    id: "opencode/ling-3.0-flash-fin-free",
+    name: "Ling 3.0 Flash",
+    description: "Financial & news synthesis model via local OpenCode CLI.",
+    badge: "Local CLI · Free",
+    isCli: true,
+  },
+  {
+    id: "opencode/mimo-v2.6-flash-free",
+    name: "Mimo v2.6 Flash",
+    description: "Lightweight, zero-cost intelligence model on local system binary.",
+    badge: "Local CLI · Free",
+    isCli: true,
+  },
+  {
+    id: "opencode-go/deepseek-v4-flash",
+    name: "DeepSeek v4 Flash",
+    description: "Frontier Chinese & global reasoning model routed via OpenCode Go.",
+    badge: "OpenCode Go",
+  },
+  {
+    id: "opencode-go/glm-5.3",
+    name: "GLM 5.3",
+    description: "Deep structured analysis and multi-source research via OpenCode Go.",
+    badge: "OpenCode Go",
   },
   {
     id: "opencode/deepseek-r1",
-    name: "DeepSeek R1 (OpenCode)",
+    name: "DeepSeek R1",
     description: "State-of-the-art open reasoning model with transparent chain-of-thought analysis.",
     badge: "Deep Reasoning",
   },
@@ -65,12 +100,6 @@ export const AVAILABLE_OPENCODE_MODELS: OpencodeModelOption[] = [
     description: "High speed multimodal model for concise briefings and synthesis.",
     badge: "Balanced",
   },
-  {
-    id: "opencode/qwen-2.5-coder-32b",
-    name: "Qwen 2.5 Coder 32B",
-    description: "Specialized model for code digests, git tracking, and technical summaries.",
-    badge: "Code & Tech",
-  },
 ];
 
 // NVIDIA Storage Keys
@@ -82,7 +111,8 @@ export const DEFAULT_NVIDIA_MODEL = "nvidia/llama-3.1-nemotron-70b-instruct";
 const OPENCODE_KEY_STORAGE = "autotask_opencode_key";
 const OPENCODE_MODEL_STORAGE = "autotask_opencode_model";
 const OPENCODE_ENDPOINT_STORAGE = "autotask_opencode_endpoint";
-export const DEFAULT_OPENCODE_MODEL = "opencode/x-preview-f-free";
+const OPENCODE_RUNNER_STORAGE = "autotask_opencode_runner";
+export const DEFAULT_OPENCODE_MODEL = "opencode/space-bunny-free";
 export const DEFAULT_OPENCODE_ENDPOINT = "https://api.opencode.ai/v1";
 
 // NVIDIA Helpers
@@ -122,7 +152,7 @@ export async function testNvidiaKey(apiKey: string): Promise<{ ok: boolean; erro
       return data;
     }
   } catch {
-    // Fall through to direct probe
+    // Fall through
   }
 
   try {
@@ -169,6 +199,35 @@ export function setOpencodeEndpoint(url: string): void {
   localStorage.setItem(OPENCODE_ENDPOINT_STORAGE, url.trim());
 }
 
+export type OpencodeRunnerMode = "auto" | "cli" | "api";
+
+export function getOpencodeRunner(): OpencodeRunnerMode {
+  return (localStorage.getItem(OPENCODE_RUNNER_STORAGE) as OpencodeRunnerMode) || "auto";
+}
+
+export function setOpencodeRunner(mode: OpencodeRunnerMode): void {
+  localStorage.setItem(OPENCODE_RUNNER_STORAGE, mode);
+}
+
+export async function checkOpencodeCliStatus(): Promise<{
+  ok: boolean;
+  installed: boolean;
+  version?: string;
+  path?: string;
+  models?: string[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch("/api/autotask/opencode/cli-status");
+    if (res.ok) {
+      return await res.json();
+    }
+    return { ok: false, installed: false, error: `HTTP ${res.status}` };
+  } catch (err) {
+    return { ok: false, installed: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function testOpencodeKey(apiKey: string, endpoint = DEFAULT_OPENCODE_ENDPOINT): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch("/api/autotask/opencode/validate-key", {
@@ -181,7 +240,7 @@ export async function testOpencodeKey(apiKey: string, endpoint = DEFAULT_OPENCOD
       return data;
     }
   } catch {
-    // Fall through to direct probe
+    // Fall through
   }
 
   try {

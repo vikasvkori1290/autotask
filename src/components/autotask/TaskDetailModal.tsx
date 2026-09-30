@@ -98,6 +98,11 @@ export function TaskDetailModal({ task, onClose, onDelete }: TaskDetailModalProp
               }`}>
                 {(task.engine || task.result?.engine) === "opencode" ? "OpenCode AI" : "NVIDIA NIM"}
               </span>
+              {task.result?.runner && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-medium bg-neutral-800 text-neutral-300 border border-neutral-700">
+                  {task.result.runner === "cli" ? "Local CLI" : task.result.runner === "api" ? "Cloud API" : "Fallback"}
+                </span>
+              )}
               {(task.result?.model || task.model) && (
                 <span className="text-neutral-500 font-mono text-[11px]">• {task.result?.model || task.model}</span>
               )}

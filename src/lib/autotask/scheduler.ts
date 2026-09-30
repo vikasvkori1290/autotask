@@ -5,6 +5,7 @@ import {
   getOpencodeApiKey,
   getOpencodeModel,
   getOpencodeEndpoint,
+  getOpencodeRunner,
 } from "./settings.ts";
 
 export interface SearchSource {
@@ -19,6 +20,7 @@ export interface TaskResult {
   completedAt: number;
   model: string;
   engine?: "nvidia" | "opencode";
+  runner?: "cli" | "api" | "fallback";
 }
 
 export interface AutoTask {
@@ -203,6 +205,7 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               engine: "opencode",
+              runner: getOpencodeRunner(),
               apiKey: opencodeKey,
               model: opencodeModel,
               endpoint: opencodeEndpoint,
@@ -220,6 +223,7 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
               completedAt: data.completedAt || Date.now(),
               model: data.model || opencodeModel,
               engine: "opencode",
+              runner: data.runner,
             };
           } else {
             executionError = (data && data.error) || `OpenCode execution failed (HTTP ${res.status})`;

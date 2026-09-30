@@ -1,5 +1,172 @@
 import { PASS, type RouteHandler } from "./table.ts";
 import { dbService } from "../autotask-db.ts";
+import fs from "fs";
+import path from "path";
+import { execSync, spawn } from "child_process";
+
+export interface OpencodeCliStatus {
+  installed: boolean;
+  version?: string;
+  path?: string;
+  models: Array<{ id: string; name: string; badge: string; isCli: boolean }>;
+  error?: string;
+}
+
+const DEFAULT_CLI_MODELS = [
+  { id: "opencode/space-bunny-free", name: "Space Bunny Free", badge: "Local CLI · Free", isCli: true },
+  { id: "opencode/nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning", badge: "Local CLI · Free", isCli: true },
+  { id: "opencode/ling-3.0-flash-fin-free", name: "Ling 3.0 Flash", badge: "Local CLI · Free", isCli: true },
+  { id: "opencode/mimo-v2.6-flash-free", name: "Mimo v2.6 Flash", badge: "Local CLI · Free", isCli: true },
+];
+
+export function findOpencodeBinary(): string | null {
+  const appData = process.env.APPDATA || "";
+  const candidates = [
+    process.env.OPENCODE_BIN_PATH,
+    path.join(appData, "npm", "node_modules", "opencode-ai", "bin", "opencode.exe"),
+    path.join(appData, "npm", "opencode.cmd"),
+  ].filter(Boolean) as string[];
+
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) {
+      return c;
+    }
+  }
+
+  try {
+    const whichCmd = process.platform === "win32" ? "where opencode" : "which opencode";
+    const found = execSync(whichCmd, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)[0];
+    if (found && fs.existsSync(found)) {
+      return found;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+export function getOpencodeCliInfo(): OpencodeCliStatus {
+  const bin = findOpencodeBinary();
+  if (!bin) {
+    return {
+      installed: false,
+      models: DEFAULT_CLI_MODELS,
+      error: "opencode binary not found on local system.",
+    };
+  }
+
+  try {
+    const version = execSync(`"${bin}" --version`, { stdio: ["ignore", "pipe", "ignore"], timeout: 6000 })
+      .toString()
+      .trim();
+    return {
+      installed: true,
+      version: version || "1.18.x",
+      path: bin,
+      models: DEFAULT_CLI_MODELS,
+    };
+  } catch (err) {
+    return {
+      installed: true,
+      path: bin,
+      models: DEFAULT_CLI_MODELS,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function runOpencodeBinary(
+  prompt: string,
+  model = "opencode/space-bunny-free",
+  envKey?: string,
+  timeoutMs = 60000
+): Promise<{ ok: boolean; output?: string; error?: string }> {
+  const bin = findOpencodeBinary();
+  if (!bin) {
+    return { ok: false, error: "OpenCode binary is not installed on the local system." };
+  }
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    let stdout = "";
+    let stderr = "";
+
+    const env = { ...process.env };
+    if (envKey) {
+      env.OPENCODE_API_KEY = envKey;
+    }
+
+    const args = ["run", "-m", model, "--format", "default", "--pure"];
+    const child = spawn(bin, args, {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+        resolve({
+          ok: false,
+          error: `OpenCode CLI timed out after ${Math.round(timeoutMs / 1000)} seconds`,
+        });
+      }
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve({ ok: false, error: err.message });
+      }
+    });
+
+    child.on("close", (code) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        const cleanOut = stdout.replace(/^\s*>.*?\r?\n/g, "").trim();
+        if (code === 0 && cleanOut) {
+          resolve({ ok: true, output: cleanOut });
+        } else {
+          resolve({
+            ok: false,
+            error: stderr.trim() || `Process exited with code ${code}`,
+            output: cleanOut,
+          });
+        }
+      }
+    });
+
+    try {
+      child.stdin.write(prompt + "\n");
+      child.stdin.end();
+    } catch (writeErr) {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve({ ok: false, error: writeErr instanceof Error ? writeErr.message : String(writeErr) });
+      }
+    }
+  });
+}
+
 
 interface SearchResult {
   title: string;
@@ -72,6 +239,18 @@ async function performWebSearch(query: string, maxResults = 6): Promise<SearchRe
   }
 }
 
+async function getJsonBody(req: any, readBodyFn: any): Promise<any> {
+  try {
+    const raw = await readBodyFn(req);
+    if (typeof raw === "string") {
+      return raw ? JSON.parse(raw) : {};
+    }
+    return raw || {};
+  } catch {
+    return {};
+  }
+}
+
 export function createAutotaskRoutes(): RouteHandler {
   return async ({ req, res, path, method, json, readBody }) => {
     // 0. DB Status
@@ -82,8 +261,7 @@ export function createAutotaskRoutes(): RouteHandler {
     // 1. Auth: Sign Up (check existence, hash password, insert to MongoDB)
     if (path === "/api/autotask/auth/signup" && method === "POST") {
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
+        const body = await getJsonBody(req, readBody);
         const name = String(body.name || "").trim();
         const email = String(body.email || "").trim().toLowerCase();
         const password = String(body.password || "");
@@ -118,8 +296,7 @@ export function createAutotaskRoutes(): RouteHandler {
     // 2. Auth: Sign In (check existence, verify password, issue session)
     if (path === "/api/autotask/auth/signin" && method === "POST") {
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
+        const body = await getJsonBody(req, readBody);
         const email = String(body.email || "").trim().toLowerCase();
         const password = String(body.password || "");
 
@@ -159,8 +336,7 @@ export function createAutotaskRoutes(): RouteHandler {
       try {
         let token = "";
         if (method === "POST") {
-          const raw = await readBody(req);
-          const body = raw ? JSON.parse(raw) : {};
+          const body = await getJsonBody(req, readBody);
           token = String(body.token || "").trim();
         }
         if (!token && req.headers.authorization) {
@@ -183,8 +359,7 @@ export function createAutotaskRoutes(): RouteHandler {
     // 4. Auth: Sign Out
     if (path === "/api/autotask/auth/signout" && method === "POST") {
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
+        const body = await getJsonBody(req, readBody);
         const token = String(body.token || "").trim();
         if (token) await dbService.deleteSession(token);
         return json(res, 200, { ok: true });
@@ -196,8 +371,7 @@ export function createAutotaskRoutes(): RouteHandler {
     // 5. Validate NVIDIA API Key
     if (path === "/api/autotask/validate-key" && method === "POST") {
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
+        const body = await getJsonBody(req, readBody);
         const apiKey = String(body.apiKey || "").trim();
 
         if (!apiKey) {
@@ -229,8 +403,7 @@ export function createAutotaskRoutes(): RouteHandler {
     // 2. Validate OpenCode API Key
     if (path === "/api/autotask/opencode/validate-key" && method === "POST") {
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
+        const body = await getJsonBody(req, readBody);
         const apiKey = String(body.apiKey || "").trim();
         const endpoint = String(body.endpoint || "https://api.opencode.ai/v1").replace(/\/+$/, "");
 
@@ -260,11 +433,29 @@ export function createAutotaskRoutes(): RouteHandler {
       }
     }
 
+    // OpenCode CLI Status
+    if (path === "/api/autotask/opencode/cli-status") {
+      const info = getOpencodeCliInfo();
+      return json(res, 200, { ok: true, ...info });
+    }
+
+    // OpenCode CLI Test
+    if (path === "/api/autotask/opencode/cli-test" && method === "POST") {
+      try {
+        const body = await getJsonBody(req, readBody);
+        const model = String(body.model || "opencode/space-bunny-free").trim();
+        const testPrompt = "Please respond with: 'OpenCode CLI is operational.'";
+        const result = await runOpencodeBinary(testPrompt, model, body.apiKey, 25000);
+        return json(res, 200, result);
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
     // 3. Perform Web Search
     if (path === "/api/autotask/search" && method === "POST") {
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
+        const body = await getJsonBody(req, readBody);
         const query = String(body.query || "").trim();
 
         if (!query) {
@@ -281,8 +472,7 @@ export function createAutotaskRoutes(): RouteHandler {
     // 4. Execute Autonomous Task using Web Search & AI Engine (NVIDIA or OpenCode)
     if (path === "/api/autotask/execute" && method === "POST") {
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
+        const body = await getJsonBody(req, readBody);
         const engine = String(body.engine || "nvidia").toLowerCase();
         const apiKey = String(body.apiKey || "").trim();
         const model = String(body.model || "").trim();
@@ -324,14 +514,54 @@ Formatting instructions:
           : `TASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
 
         // ============================================
-        // A. OPENCODE ENGINE EXECUTION
+        // A. OPENCODE ENGINE EXECUTION (LOCAL CLI & API)
         // ============================================
         if (engine === "opencode") {
+          const runner = String(body.runner || "auto").toLowerCase();
           const endpoint = String(body.endpoint || "https://api.opencode.ai/v1").replace(/\/+$/, "");
           const opencodeKey = apiKey || process.env.OPENCODE_API_KEY || "";
-          const activeModel = model || "opencode/x-preview-f-free";
+          const activeModel = model || "opencode/space-bunny-free";
 
-          // Try OpenCode API completion
+          const isCliModel = activeModel.endsWith("-free") || activeModel.startsWith("opencode/");
+          const shouldTryCli = runner === "cli" || (runner === "auto" && (isCliModel || !opencodeKey));
+
+          // 1. Try Local Binary CLI if requested or auto-preferred
+          if (shouldTryCli) {
+            const cliInfo = getOpencodeCliInfo();
+            if (cliInfo.installed) {
+              const cliPrompt = searchContext
+                ? `${systemMessage}\n\nTASK INSTRUCTIONS:\n${prompt}\n\nLATEST REAL-TIME WEB SEARCH DATA:\n${searchContext}\n\nPlease synthesize the information above into a complete, thorough, beautifully formatted briefing.`
+                : `${systemMessage}\n\nTASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
+
+              const cliRes = await runOpencodeBinary(cliPrompt, activeModel, opencodeKey, 65000);
+              if (cliRes.ok && cliRes.output) {
+                return json(res, 200, {
+                  ok: true,
+                  engine: "opencode",
+                  runner: "cli",
+                  cliVersion: cliInfo.version,
+                  model: activeModel,
+                  summary: cliRes.output,
+                  sources: searchResults,
+                  completedAt: Date.now(),
+                });
+              }
+
+              if (runner === "cli") {
+                return json(res, 500, {
+                  ok: false,
+                  error: `OpenCode CLI execution error: ${cliRes.error || "Execution failed"}`,
+                });
+              }
+            } else if (runner === "cli") {
+              return json(res, 400, {
+                ok: false,
+                error: "Local OpenCode CLI binary was not detected on this system. Switch runner to API or install opencode CLI.",
+              });
+            }
+          }
+
+          // 2. Try OpenCode remote API completion
           try {
             const ocHeaders: Record<string, string> = {
               "Content-Type": "application/json",
@@ -362,6 +592,7 @@ Formatting instructions:
                 return json(res, 200, {
                   ok: true,
                   engine: "opencode",
+                  runner: "api",
                   model: activeModel,
                   summary: content,
                   sources: searchResults,
@@ -394,6 +625,7 @@ ${
           return json(res, 200, {
             ok: true,
             engine: "opencode",
+            runner: "fallback",
             model: activeModel,
             summary: fallbackSummary,
             sources: searchResults,
