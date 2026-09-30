@@ -1,3 +1,5 @@
+import { autotaskFetch } from "./api.ts";
+
 export interface NvidiaModelOption {
   id: string;
   name: string;
@@ -142,7 +144,7 @@ export function setNvidiaModel(model: string): void {
 
 export async function testNvidiaKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch("/api/autotask/validate-key", {
+    const res = await autotaskFetch("/api/autotask/validate-key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apiKey }),
@@ -218,7 +220,7 @@ export async function checkOpencodeCliStatus(): Promise<{
   error?: string;
 }> {
   try {
-    const res = await fetch("/api/autotask/opencode/cli-status");
+    const res = await autotaskFetch("/api/autotask/opencode/cli-status");
     if (res.ok) {
       return await res.json();
     }
@@ -230,7 +232,7 @@ export async function checkOpencodeCliStatus(): Promise<{
 
 export async function testOpencodeKey(apiKey: string, endpoint = DEFAULT_OPENCODE_ENDPOINT): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch("/api/autotask/opencode/validate-key", {
+    const res = await autotaskFetch("/api/autotask/opencode/validate-key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apiKey, endpoint }),

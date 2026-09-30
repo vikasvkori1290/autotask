@@ -1,3 +1,5 @@
+import { autotaskFetch } from "./api";
+
 export interface AutotaskUser {
   id: string;
   name: string;
@@ -26,7 +28,7 @@ export async function restoreSession(): Promise<AutotaskUser | null> {
   if (!token) return null;
 
   try {
-    const res = await fetch("/api/autotask/auth/session", {
+    const res = await autotaskFetch("/api/autotask/auth/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
@@ -60,7 +62,7 @@ export async function signUp(
   if (!password || password.length < 4) return { ok: false, error: "Password must be at least 4 characters." };
 
   try {
-    const res = await fetch("/api/autotask/auth/signup", {
+    const res = await autotaskFetch("/api/autotask/auth/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: cleanName, email: cleanEmail, password }),
@@ -100,7 +102,7 @@ export async function signIn(
   if (!password) return { ok: false, error: "Please enter your password." };
 
   try {
-    const res = await fetch("/api/autotask/auth/signin", {
+    const res = await autotaskFetch("/api/autotask/auth/signin", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: cleanEmail, password }),
@@ -133,7 +135,7 @@ export async function signIn(
 export function signOut(): void {
   const token = getSessionToken();
   if (token) {
-    fetch("/api/autotask/auth/signout", {
+    autotaskFetch("/api/autotask/auth/signout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),

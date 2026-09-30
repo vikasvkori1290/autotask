@@ -82,7 +82,7 @@ export default defineConfig({
     },
   },
   server: {
-    host: "127.0.0.1",
+    host: "0.0.0.0",
     port: Number(process.env.OMB_UI_PORT) || 5199,
     watch: {
       ignored: ["**/release/**", "**/build/**", "**/dist/**", "**/electron/resources/**"],

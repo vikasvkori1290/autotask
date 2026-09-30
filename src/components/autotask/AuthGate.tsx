@@ -1,6 +1,7 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { Sparkles, ArrowRight, ShieldCheck, Lock, Mail, User, Database, AlertCircle, Loader2 } from "lucide-react";
+import { Sparkles, ArrowRight, ShieldCheck, Lock, Mail, User, AlertCircle, Loader2, Globe, Settings, CheckCircle2 } from "lucide-react";
 import { signIn, signUp, type AutotaskUser } from "../../lib/autotask/auth";
+import { autotaskFetch, getApiBaseUrl, setApiBaseUrl, isMobileApp } from "../../lib/autotask/api";
 
 interface AuthGateProps {
   onAuthenticated: (user: AutotaskUser) => void;
@@ -15,16 +16,33 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [dbStatus, setDbStatus] = useState<{ connected: boolean; mode: string } | null>(null);
+  const [serverOnline, setServerOnline] = useState<boolean | null>(null);
+  const [showServerConfig, setShowServerConfig] = useState(false);
+  const [customServerUrl, setCustomServerUrl] = useState(getApiBaseUrl() || (isMobileApp() ? "http://192.168.0.101:5199" : ""));
+  const [testingServer, setTestingServer] = useState(false);
+  const [serverMessage, setServerMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/autotask/db-status")
-      .then((r) => r.json())
-      .then((data) => {
+  const checkServer = async () => {
+    try {
+      const res = await autotaskFetch("/api/autotask/db-status");
+      if (res.ok) {
+        const data = await res.json();
+        setServerOnline(true);
         if (data.ok) {
           setDbStatus({ connected: Boolean(data.connected), mode: data.mode });
         }
-      })
-      .catch(() => {});
+        return true;
+      }
+      setServerOnline(false);
+      return false;
+    } catch {
+      setServerOnline(false);
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    void checkServer();
   }, []);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -215,16 +233,86 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
         </form>
 
         {/* Database & Security assurance footer */}
-        <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="size-3.5 text-emerald-600" />
-            <span>Secure Persistent Session</span>
+        <div className="mt-6 pt-4 border-t border-slate-100 space-y-3">
+          <div className="flex items-center justify-between text-[11px] text-slate-500">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="size-3.5 text-emerald-600" />
+              <span>Secure Session</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowServerConfig(!showServerConfig);
+                setServerMessage(null);
+              }}
+              className="flex items-center gap-1.5 text-slate-500 hover:text-indigo-600 transition"
+              title="Configure backend server URL"
+            >
+              <span className={`inline-block size-2 rounded-full ${serverOnline === true ? "bg-emerald-500" : serverOnline === false ? "bg-rose-500" : "bg-amber-400"}`} />
+              <span className="font-medium">
+                {serverOnline === true ? (dbStatus?.connected ? "MongoDB Sync" : "Server Online") : "Server Offline"}
+              </span>
+              <Settings className="size-3" />
+            </button>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <Database className="size-3 text-indigo-500" />
-            <span>{dbStatus?.connected ? "MongoDB Online" : "MongoDB / Local"}</span>
-          </div>
+          {/* Collapsible Server Configuration for Mobile APK & Custom Backends */}
+          {(showServerConfig || serverOnline === false) && (
+            <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl text-xs space-y-2">
+              <div className="flex items-center justify-between font-semibold text-slate-700">
+                <span className="flex items-center gap-1.5">
+                  <Globe className="size-3.5 text-indigo-600" />
+                  Backend Server URL
+                </span>
+                {isMobileApp() && (
+                  <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                    Mobile APK
+                  </span>
+                )}
+              </div>
+
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Connect your mobile app to your PC or deployed cloud server:
+              </p>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={customServerUrl}
+                  onChange={(e) => setCustomServerUrl(e.target.value)}
+                  placeholder="e.g. http://192.168.0.101:5199 or https://..."
+                  className="flex-1 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  disabled={testingServer}
+                  onClick={async () => {
+                    setTestingServer(true);
+                    setServerMessage(null);
+                    setApiBaseUrl(customServerUrl);
+                    const ok = await checkServer();
+                    setTestingServer(false);
+                    if (ok) {
+                      setServerMessage("Successfully connected to server!");
+                    } else {
+                      setServerMessage("Could not connect. Ensure server is running & on same Wi-Fi.");
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-medium text-xs hover:bg-indigo-700 transition disabled:opacity-50 shrink-0"
+                >
+                  {testingServer ? <Loader2 className="size-3 animate-spin" /> : "Save & Test"}
+                </button>
+              </div>
+
+              {serverMessage && (
+                <p className={`text-[11px] font-medium flex items-center gap-1 ${serverOnline ? "text-emerald-600" : "text-rose-600"}`}>
+                  {serverOnline ? <CheckCircle2 className="size-3" /> : <AlertCircle className="size-3" />}
+                  {serverMessage}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -9,6 +9,7 @@ import {
 } from "./settings.ts";
 import { sendTaskNotification } from "./notifications.ts";
 import { getSessionToken, getCurrentUser } from "./auth.ts";
+import { autotaskFetch } from "./api.ts";
 
 export interface SearchSource {
   title: string;
@@ -118,7 +119,7 @@ export async function syncTasksWithServer(): Promise<AutoTask[]> {
     const localTasks = getTasks();
     const deletedIds = getDeletedIds();
 
-    const res = await fetch("/api/autotask/tasks/sync", {
+    const res = await autotaskFetch("/api/autotask/tasks/sync", {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify({ tasks: localTasks, deletedIds }),
@@ -147,7 +148,7 @@ async function pushTaskToServer(task: AutoTask): Promise<void> {
   if (!token) return;
 
   try {
-    await fetch("/api/autotask/tasks", {
+    await autotaskFetch("/api/autotask/tasks", {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify({ task }),
@@ -165,7 +166,7 @@ async function pushDeleteToServer(taskId: string): Promise<void> {
   if (!token) return;
 
   try {
-    await fetch(`/api/autotask/tasks/${taskId}`, {
+    await autotaskFetch(`/api/autotask/tasks/${taskId}`, {
       method: "DELETE",
       headers: getAuthHeaders(),
     });
@@ -354,7 +355,7 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         let executionError = "";
 
         try {
-          const res = await fetch("/api/autotask/execute", {
+          const res = await autotaskFetch("/api/autotask/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -425,7 +426,7 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
           let executionError = "";
 
           try {
-            const res = await fetch("/api/autotask/execute", {
+            const res = await autotaskFetch("/api/autotask/execute", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
