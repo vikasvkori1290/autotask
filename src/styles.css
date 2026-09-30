@@ -1425,3 +1425,35 @@ button:disabled.bg-danger {
 [data-sidebar] :is(button, [role="button"]):not(:disabled, [aria-busy="true"]) {
   cursor: pointer;
 }
+
+/* AutoTask Premium App Styling */
+.autotask-glass {
+  background: rgba(16, 19, 26, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.autotask-glow-teal {
+  box-shadow: 0 0 25px -5px rgba(20, 184, 166, 0.35);
+}
+
+.autotask-glow-purple {
+  box-shadow: 0 0 25px -5px rgba(168, 85, 247, 0.35);
+}
+
+.autotask-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.autotask-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.autotask-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+.autotask-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
