@@ -14,7 +14,8 @@ function autotaskPlugin(): Plugin {
     name: "autotask-middleware",
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        if (req.url?.startsWith("/api/autotask/")) {
+        const url = (req.url || "").split("?")[0];
+        if (url?.startsWith("/api/autotask/")) {
           try {
             const handled = await handleAutotaskRequest(req, res);
             if (handled) return;
@@ -22,6 +23,30 @@ function autotaskPlugin(): Plugin {
             console.error("Autotask middleware error:", err);
           }
         }
+
+        // Gracefully handle legacy background polling endpoints to prevent ECONNREFUSED terminal noise
+        if (url === "/api/events") {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+          });
+          res.write("data: {}\n\n");
+          return;
+        }
+
+        if (url === "/api/routines" || url === "/api/webhooks" || url === "/api/instances") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify([]));
+          return;
+        }
+
+        if (url === "/api/config" || url === "/.well-known/openmausbot/environment") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({}));
+          return;
+        }
+
         next();
       });
     },
@@ -47,9 +72,19 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
+        configure: (proxy) => {
+          proxy.on("error", () => {
+            // Silently suppress ECONNREFUSED when backend daemon is inactive
+          });
+        },
       },
       "/.well-known/openmausbot/environment": {
         target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
+        configure: (proxy) => {
+          proxy.on("error", () => {
+            // Silently suppress ECONNREFUSED when backend daemon is inactive
+          });
+        },
       },
     },
   },
