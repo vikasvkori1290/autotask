@@ -1,6 +1,22 @@
 import { useState, type FormEvent } from "react";
-import { X, Sparkles, Clock, Calendar as CalendarIcon, Repeat, Globe, ArrowRight } from "lucide-react";
+import {
+  X,
+  Sparkles,
+  Clock,
+  Calendar as CalendarIcon,
+  Repeat,
+  Globe,
+  ArrowRight,
+  Cpu,
+  Code2,
+} from "lucide-react";
 import { addTask, type AutoTask } from "../../lib/autotask/scheduler";
+import {
+  getNvidiaModel,
+  getOpencodeModel,
+  AVAILABLE_NVIDIA_MODELS,
+  AVAILABLE_OPENCODE_MODELS,
+} from "../../lib/autotask/settings";
 
 interface TaskCreateModalProps {
   isOpen: boolean;
@@ -38,7 +54,20 @@ export function TaskCreateModal({
   const [recurrence, setRecurrence] = useState<"once" | "daily">("once");
   const [searchEnabled, setSearchEnabled] = useState(true);
 
+  // Engine selection: NVIDIA NIM vs OpenCode
+  const [engine, setEngine] = useState<"nvidia" | "opencode">("nvidia");
+  const [selectedModel, setSelectedModel] = useState<string>(() => getNvidiaModel());
+
   if (!isOpen) return null;
+
+  const handleEngineChange = (nextEngine: "nvidia" | "opencode") => {
+    setEngine(nextEngine);
+    if (nextEngine === "opencode") {
+      setSelectedModel(getOpencodeModel());
+    } else {
+      setSelectedModel(getNvidiaModel());
+    }
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -48,13 +77,20 @@ export function TaskCreateModal({
     const targetDateObj = new Date(selectedDate);
     targetDateObj.setHours(hours || 0, minutes || 0, 0, 0);
 
-    const task = addTask(prompt, targetDateObj.getTime(), recurrence);
+    const task = addTask(
+      prompt,
+      targetDateObj.getTime(),
+      recurrence,
+      undefined,
+      engine,
+      selectedModel
+    );
     onCreated(task);
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-lg max-h-[92vh] overflow-y-auto bg-neutral-900 border border-neutral-800 rounded-3xl p-5 sm:p-7 shadow-2xl text-neutral-100">
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
@@ -64,7 +100,7 @@ export function TaskCreateModal({
             </div>
             <div>
               <h2 className="text-lg font-bold text-white">Schedule Autonomous Task</h2>
-              <p className="text-xs text-neutral-400">Research begins immediately in the background</p>
+              <p className="text-xs text-neutral-400">Autonomous research starts immediately in background</p>
             </div>
           </div>
           <button
@@ -109,11 +145,88 @@ export function TaskCreateModal({
             </div>
           </div>
 
+          {/* AI Execution Engine Selector */}
+          <div>
+            <label className="block text-xs font-semibold text-neutral-300 mb-1.5">
+              Execute Task Using Engine:
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label
+                onClick={() => handleEngineChange("nvidia")}
+                className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition ${
+                  engine === "nvidia"
+                    ? "bg-emerald-500/10 border-emerald-500/50 text-white shadow-sm"
+                    : "bg-neutral-950/40 border-neutral-800/80 text-neutral-400 hover:bg-neutral-800/40"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="engine"
+                  checked={engine === "nvidia"}
+                  onChange={() => handleEngineChange("nvidia")}
+                  className="mt-0.5 accent-emerald-500"
+                />
+                <div>
+                  <div className="text-xs font-bold flex items-center gap-1.5 text-emerald-400">
+                    <Cpu className="size-3.5" />
+                    <span>NVIDIA NIM</span>
+                  </div>
+                  <div className="text-[10px] text-neutral-400 mt-0.5">Nemotron 70B &amp; Mistral</div>
+                </div>
+              </label>
+
+              <label
+                onClick={() => handleEngineChange("opencode")}
+                className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition ${
+                  engine === "opencode"
+                    ? "bg-purple-500/10 border-purple-500/50 text-white shadow-sm"
+                    : "bg-neutral-950/40 border-neutral-800/80 text-neutral-400 hover:bg-neutral-800/40"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="engine"
+                  checked={engine === "opencode"}
+                  onChange={() => handleEngineChange("opencode")}
+                  className="mt-0.5 accent-purple-500"
+                />
+                <div>
+                  <div className="text-xs font-bold flex items-center gap-1.5 text-purple-400">
+                    <Code2 className="size-3.5" />
+                    <span>OpenCode</span>
+                  </div>
+                  <div className="text-[10px] text-neutral-400 mt-0.5">Zen, Go &amp; DeepSeek R1</div>
+                </div>
+              </label>
+            </div>
+
+            {/* Model select dropdown */}
+            <div className="mt-2">
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full bg-neutral-950/70 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-teal-500"
+              >
+                {engine === "nvidia"
+                  ? AVAILABLE_NVIDIA_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.badge})
+                      </option>
+                    ))
+                  : AVAILABLE_OPENCODE_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.badge})
+                      </option>
+                    ))}
+              </select>
+            </div>
+          </div>
+
           {/* Date & Time Grid */}
           <div className="grid grid-cols-2 gap-3 pt-1">
             <div>
               <label className="block text-xs font-semibold text-neutral-300 mb-1.5 flex items-center gap-1.5">
-                <CalendarIcon className="size-3.5 text-emerald-400" />
+                <CalendarIcon className="size-3.5 text-teal-400" />
                 Target Date
               </label>
               <input
@@ -121,13 +234,13 @@ export function TaskCreateModal({
                 required
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-full bg-neutral-950/70 border border-neutral-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition [color-scheme:dark]"
+                className="w-full bg-neutral-950/70 border border-neutral-800 focus:border-teal-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition [color-scheme:dark]"
               />
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-neutral-300 mb-1.5 flex items-center gap-1.5">
-                <Clock className="size-3.5 text-emerald-400" />
+                <Clock className="size-3.5 text-teal-400" />
                 Ready By Time
               </label>
               <input
@@ -135,7 +248,7 @@ export function TaskCreateModal({
                 required
                 value={selectedTime}
                 onChange={(e) => setSelectedTime(e.target.value)}
-                className="w-full bg-neutral-950/70 border border-neutral-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition [color-scheme:dark]"
+                className="w-full bg-neutral-950/70 border border-neutral-800 focus:border-teal-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition [color-scheme:dark]"
               />
             </div>
           </div>
@@ -143,7 +256,7 @@ export function TaskCreateModal({
           {/* Frequency: Once vs Daily */}
           <div>
             <label className="block text-xs font-semibold text-neutral-300 mb-2 flex items-center gap-1.5">
-              <Repeat className="size-3.5 text-emerald-400" />
+              <Repeat className="size-3.5 text-teal-400" />
               Recurrence Frequency
             </label>
             <div className="grid grid-cols-2 gap-2">
@@ -151,7 +264,7 @@ export function TaskCreateModal({
                 onClick={() => setRecurrence("once")}
                 className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition ${
                   recurrence === "once"
-                    ? "bg-emerald-500/10 border-emerald-500/50 text-white"
+                    ? "bg-teal-500/10 border-teal-500/50 text-white"
                     : "bg-neutral-950/40 border-neutral-800/80 text-neutral-400 hover:bg-neutral-800/40"
                 }`}
               >
@@ -160,7 +273,7 @@ export function TaskCreateModal({
                   name="freq"
                   checked={recurrence === "once"}
                   onChange={() => setRecurrence("once")}
-                  className="mt-0.5 accent-emerald-500"
+                  className="mt-0.5 accent-teal-500"
                 />
                 <div>
                   <div className="text-xs font-bold">Only for this date</div>
@@ -172,7 +285,7 @@ export function TaskCreateModal({
                 onClick={() => setRecurrence("daily")}
                 className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition ${
                   recurrence === "daily"
-                    ? "bg-emerald-500/10 border-emerald-500/50 text-white"
+                    ? "bg-teal-500/10 border-teal-500/50 text-white"
                     : "bg-neutral-950/40 border-neutral-800/80 text-neutral-400 hover:bg-neutral-800/40"
                 }`}
               >
@@ -181,10 +294,10 @@ export function TaskCreateModal({
                   name="freq"
                   checked={recurrence === "daily"}
                   onChange={() => setRecurrence("daily")}
-                  className="mt-0.5 accent-emerald-500"
+                  className="mt-0.5 accent-teal-500"
                 />
                 <div>
-                  <div className="text-xs font-bold text-emerald-300 flex items-center gap-1">
+                  <div className="text-xs font-bold text-teal-300 flex items-center gap-1">
                     <span>Do it daily</span>
                     <Repeat className="size-3" />
                   </div>
@@ -197,17 +310,17 @@ export function TaskCreateModal({
           {/* Web search toggle */}
           <div className="flex items-center justify-between p-3 rounded-xl bg-neutral-950/40 border border-neutral-800/80">
             <div className="flex items-center gap-2">
-              <Globe className="size-4 text-emerald-400" />
+              <Globe className="size-4 text-teal-400" />
               <div>
                 <div className="text-xs font-semibold text-neutral-200">Live Web Search</div>
-                <div className="text-[10px] text-neutral-400">Scrapes DuckDuckGo for today's news & sources</div>
+                <div className="text-[10px] text-neutral-400">Scrapes DuckDuckGo for real-time news & sources</div>
               </div>
             </div>
             <input
               type="checkbox"
               checked={searchEnabled}
               onChange={(e) => setSearchEnabled(e.target.checked)}
-              className="size-4 accent-emerald-500 rounded cursor-pointer"
+              className="size-4 accent-teal-500 rounded cursor-pointer"
             />
           </div>
 
@@ -222,9 +335,9 @@ export function TaskCreateModal({
             </button>
             <button
               type="submit"
-              className="py-2.5 px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-neutral-950 text-xs font-bold shadow-lg shadow-emerald-500/20 active:scale-[0.99] transition flex items-center gap-2"
+              className="py-2.5 px-5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-neutral-950 text-xs font-bold shadow-lg shadow-teal-500/20 active:scale-[0.99] transition flex items-center gap-2"
             >
-              <span>Schedule & Start Research</span>
+              <span>Schedule &amp; Start Research</span>
               <ArrowRight className="size-3.5 stroke-[2.5]" />
             </button>
           </div>

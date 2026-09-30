@@ -1,4 +1,11 @@
-import { getNvidiaApiKey, getNvidiaModel, setNvidiaModel } from "./settings.ts";
+import {
+  getNvidiaApiKey,
+  getNvidiaModel,
+  setNvidiaModel,
+  getOpencodeApiKey,
+  getOpencodeModel,
+  getOpencodeEndpoint,
+} from "./settings.ts";
 
 export interface SearchSource {
   title: string;
@@ -11,6 +18,7 @@ export interface TaskResult {
   sources: SearchSource[];
   completedAt: number;
   model: string;
+  engine?: "nvidia" | "opencode";
 }
 
 export interface AutoTask {
@@ -19,6 +27,8 @@ export interface AutoTask {
   prompt: string;
   targetTime: number; // Unix timestamp in ms
   recurrence: "once" | "daily";
+  engine?: "nvidia" | "opencode";
+  model?: string;
   status: "queued" | "researching" | "ready" | "delivered" | "failed";
   createdAt: number;
   readyAt?: number;
@@ -50,7 +60,9 @@ export function addTask(
   prompt: string,
   targetTime: number,
   recurrence: "once" | "daily" = "once",
-  customTitle?: string
+  customTitle?: string,
+  engine: "nvidia" | "opencode" = "nvidia",
+  model?: string
 ): AutoTask {
   const cleanPrompt = prompt.trim();
   const title = customTitle || (cleanPrompt.length > 40 ? cleanPrompt.slice(0, 37) + "..." : cleanPrompt);
@@ -61,6 +73,8 @@ export function addTask(
     prompt: cleanPrompt,
     targetTime,
     recurrence,
+    engine,
+    model,
     status: "queued",
     createdAt: Date.now(),
   };
@@ -107,6 +121,7 @@ function playDeliveryChime() {
     console.debug("Chime playback not allowed before user interaction", err);
   }
 }
+
 let isRunnerExecuting = false;
 
 /**
@@ -134,7 +149,8 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
 
         // Browser desktop notification if permitted
         if ("Notification" in window && Notification.permission === "granted") {
-          new Notification(`AutoTask Delivered: ${task.title}`, {
+          const engineLabel = task.engine === "opencode" ? "OpenCode" : "NVIDIA NIM";
+          new Notification(`AutoTask Delivered [${engineLabel}]: ${task.title}`, {
             body: `Your scheduled task for ${new Date(task.targetTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} is ready to review.`,
             icon: "/favicon.ico",
           });
@@ -153,6 +169,8 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             prompt: task.prompt,
             targetTime: nextTarget,
             recurrence: "daily",
+            engine: task.engine,
+            model: task.model,
             status: "queued",
             createdAt: now,
           };
@@ -164,25 +182,30 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
     // 2. Execute queued tasks in the background
     const queuedTask = tasks.find((t) => t.status === "queued");
     if (queuedTask && !isRunnerExecuting) {
-      const apiKey = getNvidiaApiKey();
-      if (apiKey) {
+      const taskEngine = queuedTask.engine || "nvidia";
+
+      // If OpenCode is chosen
+      if (taskEngine === "opencode") {
         isRunnerExecuting = true;
         queuedTask.status = "researching";
         saveTasks(tasks);
         onUpdate([...tasks]);
 
-        const model = getNvidiaModel();
+        const opencodeKey = getOpencodeApiKey();
+        const opencodeModel = queuedTask.model || getOpencodeModel();
+        const opencodeEndpoint = getOpencodeEndpoint();
         let result: TaskResult | null = null;
         let executionError = "";
 
-        // Execute via backend proxy (which handles DuckDuckGo search + NVIDIA NIM API with no CORS restrictions)
         try {
           const res = await fetch("/api/autotask/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              apiKey,
-              model,
+              engine: "opencode",
+              apiKey: opencodeKey,
+              model: opencodeModel,
+              endpoint: opencodeEndpoint,
               prompt: queuedTask.prompt,
               searchEnabled: true,
             }),
@@ -195,22 +218,18 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
               summary: data.summary,
               sources: data.sources || [],
               completedAt: data.completedAt || Date.now(),
-              model: data.model || model,
+              model: data.model || opencodeModel,
+              engine: "opencode",
             };
-            if (data.model && data.model !== model) {
-              setNvidiaModel(data.model);
-            }
           } else {
-            executionError = (data && data.error) || `Execution failed (HTTP ${res.status})`;
+            executionError = (data && data.error) || `OpenCode execution failed (HTTP ${res.status})`;
           }
         } catch (serverErr) {
           executionError = serverErr instanceof Error ? serverErr.message : String(serverErr);
         }
 
-        // Reload fresh tasks from storage and save final state
         tasks = getTasks();
         const target = tasks.find((t) => t.id === queuedTask.id);
-
         if (target) {
           if (result) {
             target.status = "ready";
@@ -219,12 +238,76 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             target.error = undefined;
           } else {
             target.status = "failed";
-            target.error = executionError || "Failed to execute task.";
+            target.error = executionError || "Failed to execute OpenCode task.";
           }
           hasChanges = true;
         }
 
         isRunnerExecuting = false;
+      } else {
+        // NVIDIA Execution
+        const apiKey = getNvidiaApiKey();
+        if (apiKey) {
+          isRunnerExecuting = true;
+          queuedTask.status = "researching";
+          saveTasks(tasks);
+          onUpdate([...tasks]);
+
+          const model = queuedTask.model || getNvidiaModel();
+          let result: TaskResult | null = null;
+          let executionError = "";
+
+          try {
+            const res = await fetch("/api/autotask/execute", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                engine: "nvidia",
+                apiKey,
+                model,
+                prompt: queuedTask.prompt,
+                searchEnabled: true,
+              }),
+            });
+
+            const data = await res.json().catch(() => null);
+
+            if (res.ok && data && data.ok) {
+              result = {
+                summary: data.summary,
+                sources: data.sources || [],
+                completedAt: data.completedAt || Date.now(),
+                model: data.model || model,
+                engine: "nvidia",
+              };
+              if (data.model && data.model !== model) {
+                setNvidiaModel(data.model);
+              }
+            } else {
+              executionError = (data && data.error) || `NVIDIA execution failed (HTTP ${res.status})`;
+            }
+          } catch (serverErr) {
+            executionError = serverErr instanceof Error ? serverErr.message : String(serverErr);
+          }
+
+          tasks = getTasks();
+          const target = tasks.find((t) => t.id === queuedTask.id);
+
+          if (target) {
+            if (result) {
+              target.status = "ready";
+              target.readyAt = Date.now();
+              target.result = result;
+              target.error = undefined;
+            } else {
+              target.status = "failed";
+              target.error = executionError || "Failed to execute task.";
+            }
+            hasChanges = true;
+          }
+
+          isRunnerExecuting = false;
+        }
       }
     }
 

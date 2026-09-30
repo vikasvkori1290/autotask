@@ -86,11 +86,20 @@ export function TaskDetailModal({ task, onClose, onDelete }: TaskDetailModalProp
             </div>
 
             <h2 className="text-lg font-bold text-white leading-tight break-words pt-1">{task.prompt}</h2>
-            <div className="text-xs text-neutral-400 flex items-center gap-2">
-              <Clock className="size-3.5 text-neutral-500" />
-              <span>Target: {dateFormatted} at {timeFormatted}</span>
-              {task.result?.model && (
-                <span className="text-neutral-500">• Model: {task.result.model}</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
+              <span className="flex items-center gap-1.5">
+                <Clock className="size-3.5 text-neutral-500" />
+                <span>Target: {dateFormatted} at {timeFormatted}</span>
+              </span>
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
+                (task.engine || task.result?.engine) === "opencode"
+                  ? "bg-purple-500/10 text-purple-300 border-purple-500/30"
+                  : "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+              }`}>
+                {(task.engine || task.result?.engine) === "opencode" ? "OpenCode AI" : "NVIDIA NIM"}
+              </span>
+              {(task.result?.model || task.model) && (
+                <span className="text-neutral-500 font-mono text-[11px]">• {task.result?.model || task.model}</span>
               )}
             </div>
           </div>

@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { StoreProvider } from "@/state/store";
 import { getCurrentUser, restoreSession, type AutotaskUser } from "../../lib/autotask/auth";
 import { getNvidiaApiKey } from "../../lib/autotask/settings";
 import { AuthGate } from "./AuthGate";
@@ -38,13 +37,11 @@ export function AutotaskRoot() {
 
   // 3. Main Calendar & Connectors Workspace
   return (
-    <StoreProvider>
-      <CalendarWorkspace
-        user={currentUser}
-        onSignOut={() => {
-          setCurrentUser(null);
-        }}
-      />
-    </StoreProvider>
+    <CalendarWorkspace
+      user={currentUser}
+      onSignOut={() => {
+        setCurrentUser(null);
+      }}
+    />
   );
 }

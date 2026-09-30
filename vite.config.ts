@@ -41,6 +41,24 @@ function autotaskPlugin(): Plugin {
           return;
         }
 
+        if (url === "/api/auth/session") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ kind: "loopback" }));
+          return;
+        }
+
+        if (url === "/api/brand") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ brand: { name: "AutoTask" }, source: "default", file: "" }));
+          return;
+        }
+
+        if (url === "/api/bots" || url.startsWith("/api/bots/")) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ bots: [], groups: [], sections: [] }));
+          return;
+        }
+
         if (url === "/api/config" || url === "/.well-known/openmausbot/environment") {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({}));
@@ -68,24 +86,6 @@ export default defineConfig({
     port: Number(process.env.OMB_UI_PORT) || 5199,
     watch: {
       ignored: ["**/release/**", "**/build/**", "**/dist/**", "**/electron/resources/**"],
-    },
-    proxy: {
-      "/api": {
-        target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
-        configure: (proxy) => {
-          proxy.on("error", () => {
-            // Silently suppress ECONNREFUSED when backend daemon is inactive
-          });
-        },
-      },
-      "/.well-known/openmausbot/environment": {
-        target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
-        configure: (proxy) => {
-          proxy.on("error", () => {
-            // Silently suppress ECONNREFUSED when backend daemon is inactive
-          });
-        },
-      },
     },
   },
 });

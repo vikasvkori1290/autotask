@@ -5,6 +5,7 @@ import {
   Plus,
   Sparkles,
   Cpu,
+  Code2,
   Boxes,
   LogOut,
   Repeat,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import type { AutotaskUser } from "../../lib/autotask/auth";
 import { signOut } from "../../lib/autotask/auth";
-import { getNvidiaModel } from "../../lib/autotask/settings";
+import { getNvidiaModel, getOpencodeModel } from "../../lib/autotask/settings";
 import {
   getTasks,
   deleteTask,
@@ -30,7 +31,8 @@ import {
 import { TaskCreateModal } from "./TaskCreateModal";
 import { TaskDetailModal } from "./TaskDetailModal";
 import { NvidiaSetupModal } from "./NvidiaSetupModal";
-import { PluginsPanel } from "../PluginsPanel";
+import { OpencodeSetupModal } from "./OpencodeSetupModal";
+import { ConnectorsModal } from "./ConnectorsModal";
 
 interface CalendarWorkspaceProps {
   user: AutotaskUser;
@@ -53,6 +55,7 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
   });
   const [tasks, setTasks] = useState<AutoTask[]>([]);
   const [isNvidiaModalOpen, setIsNvidiaModalOpen] = useState(false);
+  const [isOpencodeModalOpen, setIsOpencodeModalOpen] = useState(false);
   const [isConnectorsOpen, setIsConnectorsOpen] = useState(false);
 
   // Task creation state
@@ -318,6 +321,17 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
             <span className="hidden xl:inline">{getNvidiaModel().split("/").pop()}</span>
           </button>
 
+          {/* OpenCode Connector */}
+          <button
+            type="button"
+            onClick={() => setIsOpencodeModalOpen(true)}
+            className="flex items-center gap-1.5 py-1.5 px-2.5 sm:py-2 sm:px-3 rounded-xl border border-purple-500/20 bg-purple-500/10 hover:bg-purple-500/20 text-xs font-semibold text-purple-300 transition"
+            title="Configure OpenCode AI Engine"
+          >
+            <Code2 className="size-4 text-purple-400" />
+            <span className="hidden xl:inline">{getOpencodeModel().split("/").pop()}</span>
+          </button>
+
           {/* Sign Out */}
           <button
             type="button"
@@ -440,6 +454,14 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
                                   <span>Daily</span>
                                 </span>
                               )}
+
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                                (task.engine || task.result?.engine) === "opencode"
+                                  ? "bg-purple-500/10 text-purple-300 border-purple-500/20"
+                                  : "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+                              }`}>
+                                {(task.engine || task.result?.engine) === "opencode" ? "OpenCode" : "NVIDIA NIM"}
+                              </span>
                             </div>
 
                             <h4 className="text-sm font-semibold text-white leading-snug truncate group-hover:text-emerald-300 transition">
@@ -595,11 +617,20 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
                               {task.status === "delivered" && <Sparkles className="size-3 text-purple-400" />}
                               {target.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                             </span>
-                            {task.recurrence === "daily" && (
-                              <span title="Daily Recurring">
-                                <Repeat className="size-3 text-emerald-300" />
+                            <div className="flex items-center gap-1">
+                              <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ${
+                                (task.engine || task.result?.engine) === "opencode"
+                                  ? "bg-purple-900/60 text-purple-200 border border-purple-700/50"
+                                  : "bg-emerald-900/60 text-emerald-200 border border-emerald-700/50"
+                              }`}>
+                                {(task.engine || task.result?.engine) === "opencode" ? "OC" : "NV"}
                               </span>
-                            )}
+                              {task.recurrence === "daily" && (
+                                <span title="Daily Recurring">
+                                  <Repeat className="size-3 text-emerald-300" />
+                                </span>
+                              )}
+                            </div>
                           </div>
 
                           <div className="text-xs font-semibold line-clamp-1 leading-snug">{task.prompt}</div>
@@ -662,29 +693,20 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
         onSaved={() => setIsNvidiaModalOpen(false)}
       />
 
+      {/* OpenCode Settings Modal */}
+      <OpencodeSetupModal
+        isOpen={isOpencodeModalOpen}
+        onClose={() => setIsOpencodeModalOpen(false)}
+        onSaved={() => setIsOpencodeModalOpen(false)}
+      />
+
       {/* Connectors Panel Modal */}
-      {isConnectorsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-4xl max-h-[92vh] bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Boxes className="size-5 text-teal-400" />
-                <h3 className="font-bold text-white text-base">Connected Apps &amp; Services</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsConnectorsOpen(false)}
-                className="py-1 px-3 rounded-lg text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-200 transition"
-              >
-                Close
-              </button>
-            </div>
-            <div className="p-4 sm:p-6 overflow-y-auto flex-1">
-              <PluginsPanel />
-            </div>
-          </div>
-        </div>
-      )}
+      <ConnectorsModal
+        isOpen={isConnectorsOpen}
+        onClose={() => setIsConnectorsOpen(false)}
+        onOpenNvidiaModal={() => setIsNvidiaModalOpen(true)}
+        onOpenOpencodeModal={() => setIsOpencodeModalOpen(true)}
+      />
     </div>
   );
 }
