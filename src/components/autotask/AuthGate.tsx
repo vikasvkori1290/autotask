@@ -22,7 +22,7 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
   const [testingServer, setTestingServer] = useState(false);
   const [serverMessage, setServerMessage] = useState<string | null>(null);
 
-  const checkServer = async () => {
+  const checkServer = async (): Promise<{ ok: boolean; error?: string }> => {
     try {
       const res = await autotaskFetch("/api/autotask/db-status");
       if (res.ok) {
@@ -31,13 +31,14 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
         if (data.ok) {
           setDbStatus({ connected: Boolean(data.connected), mode: data.mode });
         }
-        return true;
+        return { ok: true };
       }
       setServerOnline(false);
-      return false;
-    } catch {
+      return { ok: false, error: `Server returned HTTP ${res.status}` };
+    } catch (err) {
       setServerOnline(false);
-      return false;
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
     }
   };
 
@@ -291,12 +292,12 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
                     setTestingServer(true);
                     setServerMessage(null);
                     setApiBaseUrl(customServerUrl);
-                    const ok = await checkServer();
+                    const res = await checkServer();
                     setTestingServer(false);
-                    if (ok) {
-                      setServerMessage("Successfully connected to server!");
+                    if (res.ok) {
+                      setServerMessage("Successfully connected to server & MongoDB!");
                     } else {
-                      setServerMessage("Could not connect. Ensure server is running & on same Wi-Fi.");
+                      setServerMessage(res.error || "Could not connect to server.");
                     }
                   }}
                   className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white font-medium text-xs hover:bg-indigo-700 transition disabled:opacity-50 shrink-0"

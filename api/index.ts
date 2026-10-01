@@ -22,7 +22,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   const path = url.pathname;
 
   try {
-    const handled = await autotaskHandler({
+    await autotaskHandler({
       req,
       res,
       url,

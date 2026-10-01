@@ -83,6 +83,7 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
+    allowedHosts: true,
     port: Number(process.env.OMB_UI_PORT) || 5199,
     watch: {
       ignored: ["**/release/**", "**/build/**", "**/dist/**", "**/electron/resources/**"],
