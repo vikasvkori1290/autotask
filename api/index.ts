@@ -1,69 +1,90 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { createAutotaskRoutes } from "../server/routes/autotask.ts";
-import { json, readBody } from "../server/harness/http.ts";
-import { dbService } from "../server/autotask-db.ts";
-
 let autotaskHandler: any = null;
 
-export default async function handler(req: IncomingMessage, res: ServerResponse) {
-  // CORS Headers allowing requests from Netlify, local dev, and Mobile APK
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Bypass-Tunnel-Reminder, ngrok-skip-browser-warning");
-
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  const host = req.headers.host || "localhost";
-  const protocol = req.headers["x-forwarded-proto"] || "https";
-  const url = new URL(req.url || "/", `${protocol}://${host}`);
-  const path = url.pathname;
-
-  // Root health-check endpoint so visiting https://autotask-mocha.vercel.app directly renders success
-  if (path === "/" || path === "/api" || path === "/api/health") {
-    return json(res, 200, {
-      ok: true,
-      service: "AutoTask Serverless Backend",
-      status: "online",
-      database: dbService.getStatus(),
-      endpoints: [
-        "/api/autotask/db-status",
-        "/api/autotask/auth/signup",
-        "/api/autotask/auth/signin",
-        "/api/autotask/auth/session",
-        "/api/autotask/tasks",
-        "/api/autotask/tasks/sync",
-        "/api/autotask/execute",
-      ],
-    });
-  }
-
+export default async function handler(req: any, res: any) {
   try {
+    // CORS Headers allowing requests from Netlify, local dev, and Mobile APK
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Bypass-Tunnel-Reminder, ngrok-skip-browser-warning");
+
+    if (req.method === "OPTIONS") {
+      if (typeof res.status === "function") {
+        return res.status(204).end();
+      }
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    const host = req.headers?.host || "localhost";
+    const protocol = req.headers?.["x-forwarded-proto"] || "https";
+    const url = new URL(req.url || "/", `${protocol}://${host}`);
+    const path = url.pathname;
+
+    const sendJson = (status: number, data: any) => {
+      if (typeof res.status === "function" && typeof res.json === "function") {
+        return res.status(status).json(data);
+      }
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(data));
+    };
+
+    // Root health-check endpoint
+    if (path === "/" || path === "/api" || path === "/api/health") {
+      let dbConnected = false;
+      try {
+        const { dbService } = await import("../server/autotask-db.ts");
+        dbConnected = dbService.getStatus().connected;
+      } catch {
+        // ignore
+      }
+
+      return sendJson(200, {
+        ok: true,
+        service: "AutoTask Serverless Backend",
+        status: "online",
+        databaseConnected: dbConnected,
+        time: new Date().toISOString(),
+      });
+    }
+
+    // Lazy load the handler inside try/catch so any import or init issue is caught cleanly
     if (!autotaskHandler) {
+      const { createAutotaskRoutes } = await import("../server/routes/autotask.ts");
       autotaskHandler = createAutotaskRoutes();
     }
+
+    const safeReadBody = async (request: any) => {
+      if (request.body !== undefined) {
+        return request.body;
+      }
+      const { readBody } = await import("../server/harness/http.ts");
+      return readBody(request);
+    };
 
     await autotaskHandler({
       req,
       res,
       url,
       path,
-      method: req.method || "GET",
+      method: (req.method || "GET").toUpperCase(),
       auth: { kind: "none" } as any,
-      json,
-      readBody,
+      json: (_res: any, status: number, body: any) => sendJson(status, body),
+      readBody: safeReadBody,
     });
 
     if (!res.headersSent && !res.writableEnded) {
-      json(res, 404, { ok: false, error: "AutoTask endpoint not found", path });
+      sendJson(404, { ok: false, error: "AutoTask endpoint not found", path });
     }
   } catch (err) {
-    console.error("[AutoTask Vercel API Error]", err);
-    if (!res.headersSent) {
-      json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    console.error("[AutoTask Serverless Error]", err);
+    const errorDetails = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    if (!res.headersSent && !res.writableEnded) {
+      if (typeof res.status === "function" && typeof res.json === "function") {
+        return res.status(500).json({ ok: false, error: errorDetails });
+      }
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: errorDetails }));
     }
   }
 }
