@@ -268,6 +268,9 @@ export function createAutotaskRoutes(): RouteHandler {
 
     // 0. DB Status
     if (path === "/api/autotask/db-status") {
+      if (!dbService.getStatus().connected) {
+        await dbService.connect();
+      }
       return json(res, 200, { ok: true, ...dbService.getStatus() });
     }
 

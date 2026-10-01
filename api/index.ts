@@ -1,4 +1,8 @@
-let autotaskHandler: any = null;
+import { createAutotaskRoutes } from "../server/routes/autotask.ts";
+import { dbService } from "../server/autotask-db.ts";
+import { readBody } from "../server/harness/http.ts";
+
+const autotaskHandler = createAutotaskRoutes();
 
 export default async function handler(req: any, res: any) {
   try {
@@ -29,39 +33,26 @@ export default async function handler(req: any, res: any) {
       res.end(JSON.stringify(data));
     };
 
+    // Ensure database connection
+    if (!dbService.getStatus().connected) {
+      await dbService.connect();
+    }
+
     // Root health-check endpoint
     if (path === "/" || path === "/api" || path === "/api/health") {
-      let dbConnected = false;
-      try {
-        const { dbService } = await import("../server/autotask-db.ts");
-        if (!dbService.getStatus().connected) {
-          await dbService.connect();
-        }
-        dbConnected = dbService.getStatus().connected;
-      } catch {
-        // ignore
-      }
-
       return sendJson(200, {
         ok: true,
         service: "AutoTask Serverless Backend",
         status: "online",
-        databaseConnected: dbConnected,
+        databaseConnected: dbService.getStatus().connected,
         time: new Date().toISOString(),
       });
-    }
-
-    // Lazy load the handler inside try/catch so any import or init issue is caught cleanly
-    if (!autotaskHandler) {
-      const { createAutotaskRoutes } = await import("../server/routes/autotask.ts");
-      autotaskHandler = createAutotaskRoutes();
     }
 
     const safeReadBody = async (request: any) => {
       if (request.body !== undefined) {
         return request.body;
       }
-      const { readBody } = await import("../server/harness/http.ts");
       return readBody(request);
     };
 

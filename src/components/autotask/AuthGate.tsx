@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { Sparkles, ArrowRight, ShieldCheck, Lock, Mail, User, AlertCircle, Loader2, Globe, Settings, CheckCircle2 } from "lucide-react";
 import { signIn, signUp, type AutotaskUser } from "../../lib/autotask/auth";
-import { autotaskFetch, getApiBaseUrl, setApiBaseUrl, isMobileApp } from "../../lib/autotask/api";
+import { autotaskFetch, getApiBaseUrl, setApiBaseUrl, isMobileApp, DEFAULT_PRODUCTION_BACKEND } from "../../lib/autotask/api";
 
 interface AuthGateProps {
   onAuthenticated: (user: AutotaskUser) => void;
@@ -18,7 +18,7 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
   const [dbStatus, setDbStatus] = useState<{ connected: boolean; mode: string } | null>(null);
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
   const [showServerConfig, setShowServerConfig] = useState(false);
-  const [customServerUrl, setCustomServerUrl] = useState(getApiBaseUrl() || (isMobileApp() ? "http://192.168.0.101:5199" : ""));
+  const [customServerUrl, setCustomServerUrl] = useState(getApiBaseUrl() || DEFAULT_PRODUCTION_BACKEND);
   const [testingServer, setTestingServer] = useState(false);
   const [serverMessage, setServerMessage] = useState<string | null>(null);
 
@@ -259,7 +259,7 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
           </div>
 
           {/* Collapsible Server Configuration for Mobile APK & Custom Backends */}
-          {(showServerConfig || serverOnline === false) && (
+          {showServerConfig && (
             <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl text-xs space-y-2">
               <div className="flex items-center justify-between font-semibold text-slate-700">
                 <span className="flex items-center gap-1.5">
