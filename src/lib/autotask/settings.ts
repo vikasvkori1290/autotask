@@ -117,13 +117,90 @@ const OPENCODE_RUNNER_STORAGE = "autotask_opencode_runner";
 export const DEFAULT_OPENCODE_MODEL = "opencode/space-bunny-free";
 export const DEFAULT_OPENCODE_ENDPOINT = "https://api.opencode.ai/v1";
 
+// Cloud Settings Sync & Persistence
+const AUTH_TOKEN_STORAGE = "autotask_session_token";
+
+export interface UserSettingsPayload {
+  nvidiaApiKey?: string;
+  nvidiaModel?: string;
+  opencodeApiKey?: string;
+  opencodeModel?: string;
+  opencodeEndpoint?: string;
+  opencodeRunner?: string;
+}
+
+export function applyCloudSettings(settings?: UserSettingsPayload | null): void {
+  if (!settings) return;
+  if (settings.nvidiaApiKey) {
+    localStorage.setItem(NVIDIA_KEY_STORAGE, settings.nvidiaApiKey.trim());
+  }
+  if (settings.nvidiaModel) {
+    localStorage.setItem(NVIDIA_MODEL_STORAGE, settings.nvidiaModel.trim());
+  }
+  if (settings.opencodeApiKey) {
+    localStorage.setItem(OPENCODE_KEY_STORAGE, settings.opencodeApiKey.trim());
+  }
+  if (settings.opencodeModel) {
+    localStorage.setItem(OPENCODE_MODEL_STORAGE, settings.opencodeModel.trim());
+  }
+  if (settings.opencodeEndpoint) {
+    localStorage.setItem(OPENCODE_ENDPOINT_STORAGE, settings.opencodeEndpoint.trim());
+  }
+  if (settings.opencodeRunner) {
+    localStorage.setItem(OPENCODE_RUNNER_STORAGE, settings.opencodeRunner.trim());
+  }
+}
+
+export async function saveSettingsToServer(partial: UserSettingsPayload): Promise<void> {
+  const token = localStorage.getItem(AUTH_TOKEN_STORAGE);
+  if (!token) return;
+
+  try {
+    await autotaskFetch("/api/autotask/settings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify(partial),
+    });
+  } catch (err) {
+    console.debug("[Autotask] Failed to persist settings to server:", err);
+  }
+}
+
+export async function syncSettingsFromServer(): Promise<UserSettingsPayload | null> {
+  const token = localStorage.getItem(AUTH_TOKEN_STORAGE);
+  if (!token) return null;
+
+  try {
+    const res = await autotaskFetch("/api/autotask/settings", {
+      headers: {
+        "Authorization": `Bearer ${token}`,
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok && data.settings) {
+        applyCloudSettings(data.settings);
+        return data.settings;
+      }
+    }
+  } catch (err) {
+    console.debug("[Autotask] Failed to fetch settings from server:", err);
+  }
+  return null;
+}
+
 // NVIDIA Helpers
 export function getNvidiaApiKey(): string {
   return (localStorage.getItem(NVIDIA_KEY_STORAGE) || "").trim();
 }
 
 export function setNvidiaApiKey(key: string): void {
-  localStorage.setItem(NVIDIA_KEY_STORAGE, key.trim());
+  const cleanKey = key.trim();
+  localStorage.setItem(NVIDIA_KEY_STORAGE, cleanKey);
+  void saveSettingsToServer({ nvidiaApiKey: cleanKey });
 }
 
 export function getNvidiaModel(): string {
@@ -140,6 +217,7 @@ export function getNvidiaModel(): string {
 
 export function setNvidiaModel(model: string): void {
   localStorage.setItem(NVIDIA_MODEL_STORAGE, model);
+  void saveSettingsToServer({ nvidiaModel: model });
 }
 
 export async function testNvidiaKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
@@ -180,7 +258,9 @@ export function getOpencodeApiKey(): string {
 }
 
 export function setOpencodeApiKey(key: string): void {
-  localStorage.setItem(OPENCODE_KEY_STORAGE, key.trim());
+  const cleanKey = key.trim();
+  localStorage.setItem(OPENCODE_KEY_STORAGE, cleanKey);
+  void saveSettingsToServer({ opencodeApiKey: cleanKey });
 }
 
 export function getOpencodeModel(): string {
@@ -191,6 +271,7 @@ export function getOpencodeModel(): string {
 
 export function setOpencodeModel(model: string): void {
   localStorage.setItem(OPENCODE_MODEL_STORAGE, model);
+  void saveSettingsToServer({ opencodeModel: model });
 }
 
 export function getOpencodeEndpoint(): string {
@@ -198,7 +279,9 @@ export function getOpencodeEndpoint(): string {
 }
 
 export function setOpencodeEndpoint(url: string): void {
-  localStorage.setItem(OPENCODE_ENDPOINT_STORAGE, url.trim());
+  const cleanUrl = url.trim();
+  localStorage.setItem(OPENCODE_ENDPOINT_STORAGE, cleanUrl);
+  void saveSettingsToServer({ opencodeEndpoint: cleanUrl });
 }
 
 export type OpencodeRunnerMode = "auto" | "cli" | "api";
@@ -209,6 +292,7 @@ export function getOpencodeRunner(): OpencodeRunnerMode {
 
 export function setOpencodeRunner(mode: OpencodeRunnerMode): void {
   localStorage.setItem(OPENCODE_RUNNER_STORAGE, mode);
+  void saveSettingsToServer({ opencodeRunner: mode });
 }
 
 export async function checkOpencodeCliStatus(): Promise<{

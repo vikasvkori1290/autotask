@@ -78,6 +78,19 @@ export interface DbTask {
   error?: string;
   notifiedReady?: boolean;
   notifiedDelivered?: boolean;
+  retryCount?: number;
+  nextRetryAt?: number;
+}
+
+export interface DbUserSettings {
+  userId: string;
+  nvidiaApiKey?: string;
+  nvidiaModel?: string;
+  opencodeApiKey?: string;
+  opencodeModel?: string;
+  opencodeEndpoint?: string;
+  opencodeRunner?: string;
+  updatedAt: number;
 }
 
 const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
@@ -88,6 +101,7 @@ interface FallbackDb {
   users: DbUser[];
   sessions: DbSession[];
   tasks: DbTask[];
+  settings?: DbUserSettings[];
 }
 
 function loadFallbackDb(): FallbackDb {
@@ -98,12 +112,13 @@ function loadFallbackDb(): FallbackDb {
         users: data.users || [],
         sessions: data.sessions || [],
         tasks: data.tasks || [],
+        settings: data.settings || [],
       };
     }
   } catch (err) {
     console.error("[Autotask DB] Error loading fallback DB:", err);
   }
-  return { users: [], sessions: [], tasks: [] };
+  return { users: [], sessions: [], tasks: [], settings: [] };
 }
 
 function saveFallbackDb(db: FallbackDb): void {
@@ -153,6 +168,7 @@ class AutotaskDatabase {
       await this.db.collection("sessions").createIndex({ token: 1 }, { unique: true });
       await this.db.collection("tasks").createIndex({ userId: 1 });
       await this.db.collection("tasks").createIndex({ id: 1 }, { unique: true });
+      await this.db.collection("user_settings").createIndex({ userId: 1 }, { unique: true });
 
       // Migrate any fallback users to MongoDB if newly connected
       if (this.fallbackMemory.users.length > 0) {
@@ -381,6 +397,61 @@ class AutotaskDatabase {
     if (this.fallbackMemory.tasks.length < before) deleted = true;
     saveFallbackDb(this.fallbackMemory);
     return deleted;
+  }
+
+  // =============================================
+  // USER SETTINGS & API KEY PERSISTENCE (MONGODB)
+  // =============================================
+
+  public async getUserSettings(userId: string): Promise<DbUserSettings | null> {
+    if (this.isConnected && this.db) {
+      try {
+        const found = await this.db.collection<DbUserSettings>("user_settings").findOne({ userId });
+        if (found) return found;
+      } catch (err) {
+        console.error("[Autotask DB] getUserSettings error:", err);
+      }
+    }
+    this.fallbackMemory = loadFallbackDb();
+    return (this.fallbackMemory.settings || []).find((s) => s.userId === userId) || null;
+  }
+
+  public async saveUserSettings(userId: string, partial: Partial<DbUserSettings>): Promise<DbUserSettings> {
+    const existing = await this.getUserSettings(userId);
+    const updated: DbUserSettings = {
+      userId,
+      nvidiaApiKey: partial.nvidiaApiKey !== undefined ? partial.nvidiaApiKey : (existing?.nvidiaApiKey || ""),
+      nvidiaModel: partial.nvidiaModel !== undefined ? partial.nvidiaModel : (existing?.nvidiaModel || ""),
+      opencodeApiKey: partial.opencodeApiKey !== undefined ? partial.opencodeApiKey : (existing?.opencodeApiKey || ""),
+      opencodeModel: partial.opencodeModel !== undefined ? partial.opencodeModel : (existing?.opencodeModel || ""),
+      opencodeEndpoint: partial.opencodeEndpoint !== undefined ? partial.opencodeEndpoint : (existing?.opencodeEndpoint || ""),
+      opencodeRunner: partial.opencodeRunner !== undefined ? partial.opencodeRunner : (existing?.opencodeRunner || ""),
+      updatedAt: Date.now(),
+    };
+
+    if (this.isConnected && this.db) {
+      try {
+        await this.db.collection("user_settings").updateOne(
+          { userId },
+          { $set: updated },
+          { upsert: true }
+        );
+      } catch (err) {
+        console.error("[Autotask DB] saveUserSettings error in mongo:", err);
+      }
+    }
+
+    this.fallbackMemory = loadFallbackDb();
+    if (!this.fallbackMemory.settings) this.fallbackMemory.settings = [];
+    const idx = this.fallbackMemory.settings.findIndex((s) => s.userId === userId);
+    if (idx >= 0) {
+      this.fallbackMemory.settings[idx] = updated;
+    } else {
+      this.fallbackMemory.settings.push(updated);
+    }
+    saveFallbackDb(this.fallbackMemory);
+
+    return updated;
   }
 }
 

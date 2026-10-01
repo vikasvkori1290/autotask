@@ -1,0 +1,69 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Calendar Tablet Surface -->
+    <path
+        android:pathData="M32,32 L76,32 A8,8 0 0 1 84,40 L84,74 A8,8 0 0 1 76,82 L32,82 A8,8 0 0 1 24,74 L24,40 A8,8 0 0 1 32,32 Z"
+        android:strokeWidth="2.5"
+        android:strokeColor="#6366F1">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54"
+                android:startY="32"
+                android:endX="54"
+                android:endY="82"
+                android:type="linear">
+                <item android:color="#FF1E293B" android:offset="0.0" />
+                <item android:color="#FF0F172A" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Top Header Divider Line -->
+    <path
+        android:pathData="M24,44 L84,44"
+        android:strokeWidth="1.5"
+        android:strokeColor="#475569" />
+
+    <!-- Top Binder Hooks -->
+    <!-- Left Hook -->
+    <path
+        android:pathData="M38,26 L42,26 A2,2 0 0 1 44,28 L44,36 A2,2 0 0 1 42,38 L38,38 A2,2 0 0 1 36,36 L36,28 A2,2 0 0 1 38,26 Z"
+        android:fillColor="#818CF8" />
+
+    <!-- Right Hook -->
+    <path
+        android:pathData="M66,26 L70,26 A2,2 0 0 1 72,28 L72,36 A2,2 0 0 1 70,38 L66,38 A2,2 0 0 1 64,36 L64,28 A2,2 0 0 1 66,26 Z"
+        android:fillColor="#818CF8" />
+
+    <!-- Central Glowing AI Sparkle Star -->
+    <path
+        android:pathData="M54,48 Q54,62 40,62 Q54,62 54,76 Q54,62 68,62 Q54,62 54,48 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="40"
+                android:startY="48"
+                android:endX="68"
+                android:endY="76"
+                android:type="linear">
+                <item android:color="#FFFFFFFF" android:offset="0.0" />
+                <item android:color="#FF818CF8" android:offset="0.6" />
+                <item android:color="#FF38BDF8" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner Core Diamond -->
+    <path
+        android:pathData="M54,58 L57.5,62 L54,66 L50.5,62 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Secondary Micro Sparkle -->
+    <path
+        android:pathData="M72,48 Q72,52 68,52 Q72,52 72,56 Q72,52 76,52 Q72,52 72,48 Z"
+        android:fillColor="#38BDF8" />
+</vector>

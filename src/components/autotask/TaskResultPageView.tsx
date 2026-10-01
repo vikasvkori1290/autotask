@@ -103,7 +103,7 @@ export function TaskResultPageView({ task, onBack, onDelete }: TaskResultPageVie
       <div className="absolute bottom-0 left-1/4 w-[500px] h-[300px] bg-emerald-500/[0.04] blur-[120px] rounded-full pointer-events-none" />
 
       {/* TOP STICKY BAR */}
-      <header className="sticky top-0 z-30 border-b border-slate-200/90 autotask-glass px-4 sm:px-8 py-3 flex items-center justify-between gap-3 shadow-xs">
+      <header className="sticky top-0 z-30 border-b border-slate-200/90 autotask-glass px-4 sm:px-8 pt-[max(env(safe-area-inset-top,0px),2.5rem)] pb-3 sm:py-3 flex items-center justify-between gap-3 shadow-xs">
         <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"

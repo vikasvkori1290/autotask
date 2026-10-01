@@ -6,6 +6,7 @@ import {
   getOpencodeModel,
   getOpencodeEndpoint,
   getOpencodeRunner,
+  syncSettingsFromServer,
 } from "./settings.ts";
 import { sendTaskNotification } from "./notifications.ts";
 import { getSessionToken, getCurrentUser } from "./auth.ts";
@@ -44,6 +45,8 @@ export interface AutoTask {
   error?: string;
   notifiedReady?: boolean;
   notifiedDelivered?: boolean;
+  retryCount?: number;
+  nextRetryAt?: number;
 }
 
 const TASKS_STORAGE = "autotask_calendar_tasks";
@@ -343,7 +346,26 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
     }
 
     // 2. Execute queued tasks in the background (single-device claim & conflict-free)
-    const queuedTask = tasks.find((t) => t.status === "queued");
+    const queuedTask = tasks.find((t) => {
+      if (t.status === "queued") {
+        if (t.nextRetryAt && t.nextRetryAt > now) {
+          return false;
+        }
+        return true;
+      }
+      return false;
+    });
+
+    // Auto-restart any failed tasks if ready for retry
+    if (!queuedTask && !isRunnerExecuting) {
+      const failedTask = tasks.find((t) => t.status === "failed" && (!t.nextRetryAt || t.nextRetryAt <= now));
+      if (failedTask) {
+        failedTask.status = "queued";
+        failedTask.nextRetryAt = Date.now() + 1000;
+        hasChanges = true;
+      }
+    }
+
     if (queuedTask && !isRunnerExecuting) {
       const taskEngine = queuedTask.engine || "nvidia";
 
@@ -426,14 +448,21 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             target.updatedAt = Date.now();
             target.result = result;
             target.error = undefined;
+            target.retryCount = 0;
+            target.nextRetryAt = undefined;
             if (!target.notifiedReady) {
               void sendTaskNotification(target, "completed");
               target.notifiedReady = true;
             }
           } else {
-            target.status = "failed";
+            // Auto-restart on failure with backoff
+            const retries = (target.retryCount || 0) + 1;
+            target.retryCount = retries;
             target.updatedAt = Date.now();
-            target.error = executionError || "Failed to execute OpenCode task.";
+            const backoffMs = Math.min(30000, 3000 * Math.pow(1.5, Math.min(retries - 1, 4)));
+            target.nextRetryAt = Date.now() + backoffMs;
+            target.error = `${executionError || "Failed to execute OpenCode task."} (Auto-restarting attempt #${retries}...)`;
+            target.status = "queued"; // Auto-restart
           }
           hasChanges = true;
           void pushTaskToServer(target);
@@ -442,7 +471,14 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         isRunnerExecuting = false;
       } else {
         // NVIDIA Execution
-        const apiKey = getNvidiaApiKey();
+        let apiKey = getNvidiaApiKey();
+        if (!apiKey) {
+          const synced = await syncSettingsFromServer();
+          if (synced?.nvidiaApiKey) {
+            apiKey = synced.nvidiaApiKey;
+          }
+        }
+
         if (apiKey) {
           const model = queuedTask.model || getNvidiaModel();
           let result: TaskResult | null = null;
@@ -498,14 +534,21 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
               target.updatedAt = Date.now();
               target.result = result;
               target.error = undefined;
+              target.retryCount = 0;
+              target.nextRetryAt = undefined;
               if (!target.notifiedReady) {
                 void sendTaskNotification(target, "completed");
                 target.notifiedReady = true;
               }
             } else {
-              target.status = "failed";
+              // Auto-restart on failure with backoff
+              const retries = (target.retryCount || 0) + 1;
+              target.retryCount = retries;
               target.updatedAt = Date.now();
-              target.error = executionError || "Failed to execute task.";
+              const backoffMs = Math.min(30000, 3000 * Math.pow(1.5, Math.min(retries - 1, 4)));
+              target.nextRetryAt = Date.now() + backoffMs;
+              target.error = `${executionError || "Failed to execute task."} (Auto-restarting attempt #${retries}...)`;
+              target.status = "queued"; // Auto-restart
             }
             hasChanges = true;
             void pushTaskToServer(target);
@@ -513,6 +556,16 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
 
           isRunnerExecuting = false;
         } else {
+          // No API key configured yet
+          tasks = getTasks();
+          const target = tasks.find((t) => t.id === queuedTask.id);
+          if (target) {
+            target.status = "queued";
+            target.nextRetryAt = Date.now() + 10000;
+            target.error = "NVIDIA API key required. Waiting for key configuration...";
+            hasChanges = true;
+            void pushTaskToServer(target);
+          }
           isRunnerExecuting = false;
         }
       }

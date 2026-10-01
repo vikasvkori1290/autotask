@@ -37,13 +37,14 @@ function loadFallbackDb() {
       return {
         users: data.users || [],
         sessions: data.sessions || [],
-        tasks: data.tasks || []
+        tasks: data.tasks || [],
+        settings: data.settings || []
       };
     }
   } catch (err) {
     console.error("[Autotask DB] Error loading fallback DB:", err);
   }
-  return { users: [], sessions: [], tasks: [] };
+  return { users: [], sessions: [], tasks: [], settings: [] };
 }
 function saveFallbackDb(db) {
   try {
@@ -85,6 +86,7 @@ var AutotaskDatabase = class {
       await this.db.collection("sessions").createIndex({ token: 1 }, { unique: true });
       await this.db.collection("tasks").createIndex({ userId: 1 });
       await this.db.collection("tasks").createIndex({ id: 1 }, { unique: true });
+      await this.db.collection("user_settings").createIndex({ userId: 1 }, { unique: true });
       if (this.fallbackMemory.users.length > 0) {
         for (const u of this.fallbackMemory.users) {
           await this.db.collection("users").updateOne(
@@ -283,6 +285,55 @@ var AutotaskDatabase = class {
     if (this.fallbackMemory.tasks.length < before) deleted = true;
     saveFallbackDb(this.fallbackMemory);
     return deleted;
+  }
+  // =============================================
+  // USER SETTINGS & API KEY PERSISTENCE (MONGODB)
+  // =============================================
+  async getUserSettings(userId) {
+    if (this.isConnected && this.db) {
+      try {
+        const found = await this.db.collection("user_settings").findOne({ userId });
+        if (found) return found;
+      } catch (err) {
+        console.error("[Autotask DB] getUserSettings error:", err);
+      }
+    }
+    this.fallbackMemory = loadFallbackDb();
+    return (this.fallbackMemory.settings || []).find((s) => s.userId === userId) || null;
+  }
+  async saveUserSettings(userId, partial) {
+    const existing = await this.getUserSettings(userId);
+    const updated = {
+      userId,
+      nvidiaApiKey: partial.nvidiaApiKey !== void 0 ? partial.nvidiaApiKey : existing?.nvidiaApiKey || "",
+      nvidiaModel: partial.nvidiaModel !== void 0 ? partial.nvidiaModel : existing?.nvidiaModel || "",
+      opencodeApiKey: partial.opencodeApiKey !== void 0 ? partial.opencodeApiKey : existing?.opencodeApiKey || "",
+      opencodeModel: partial.opencodeModel !== void 0 ? partial.opencodeModel : existing?.opencodeModel || "",
+      opencodeEndpoint: partial.opencodeEndpoint !== void 0 ? partial.opencodeEndpoint : existing?.opencodeEndpoint || "",
+      opencodeRunner: partial.opencodeRunner !== void 0 ? partial.opencodeRunner : existing?.opencodeRunner || "",
+      updatedAt: Date.now()
+    };
+    if (this.isConnected && this.db) {
+      try {
+        await this.db.collection("user_settings").updateOne(
+          { userId },
+          { $set: updated },
+          { upsert: true }
+        );
+      } catch (err) {
+        console.error("[Autotask DB] saveUserSettings error in mongo:", err);
+      }
+    }
+    this.fallbackMemory = loadFallbackDb();
+    if (!this.fallbackMemory.settings) this.fallbackMemory.settings = [];
+    const idx = this.fallbackMemory.settings.findIndex((s) => s.userId === userId);
+    if (idx >= 0) {
+      this.fallbackMemory.settings[idx] = updated;
+    } else {
+      this.fallbackMemory.settings.push(updated);
+    }
+    saveFallbackDb(this.fallbackMemory);
+    return updated;
   }
 };
 var dbService = new AutotaskDatabase();
@@ -544,10 +595,12 @@ function createAutotaskRoutes() {
           });
         }
         const token = await dbService.createSession(user.id, user.email);
+        const settings = await dbService.getUserSettings(user.id);
         return json(res, 200, {
           ok: true,
           user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
-          token
+          token,
+          settings: settings || {}
         });
       } catch (err) {
         return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -566,9 +619,11 @@ function createAutotaskRoutes() {
         if (!token) return json(res, 401, { ok: false, error: "No token provided." });
         const user = await dbService.validateSession(token);
         if (!user) return json(res, 401, { ok: false, error: "Session invalid or expired." });
+        const settings = await dbService.getUserSettings(user.id);
         return json(res, 200, {
           ok: true,
-          user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt }
+          user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+          settings: settings || {}
         });
       } catch (err) {
         return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -580,6 +635,34 @@ function createAutotaskRoutes() {
         const token = String(body.token || "").trim();
         if (token) await dbService.deleteSession(token);
         return json(res, 200, { ok: true });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (path2 === "/api/autotask/settings" && method === "GET") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+        const settings = await dbService.getUserSettings(user.id);
+        return json(res, 200, { ok: true, settings: settings || {} });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (path2 === "/api/autotask/settings" && method === "POST") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+        const body = await getJsonBody(req, readBody2);
+        const saved = await dbService.saveUserSettings(user.id, {
+          nvidiaApiKey: body.nvidiaApiKey !== void 0 ? String(body.nvidiaApiKey).trim() : void 0,
+          nvidiaModel: body.nvidiaModel !== void 0 ? String(body.nvidiaModel).trim() : void 0,
+          opencodeApiKey: body.opencodeApiKey !== void 0 ? String(body.opencodeApiKey).trim() : void 0,
+          opencodeModel: body.opencodeModel !== void 0 ? String(body.opencodeModel).trim() : void 0,
+          opencodeEndpoint: body.opencodeEndpoint !== void 0 ? String(body.opencodeEndpoint).trim() : void 0,
+          opencodeRunner: body.opencodeRunner !== void 0 ? String(body.opencodeRunner).trim() : void 0
+        });
+        return json(res, 200, { ok: true, settings: saved });
       } catch (err) {
         return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
       }
@@ -774,7 +857,10 @@ function createAutotaskRoutes() {
         const body = await getJsonBody(req, readBody2);
         const taskId = String(body.taskId || "").trim();
         const user = await authenticateUser();
-        if (taskId && user) {
+        if (!user) {
+          return json(res, 401, { ok: false, error: "Authentication required to execute tasks." });
+        }
+        if (taskId) {
           const existingTask = await dbService.getTaskById(taskId, user.id);
           if (existingTask && (existingTask.status === "ready" || existingTask.status === "delivered") && existingTask.result) {
             return json(res, 200, {
@@ -842,7 +928,11 @@ Please execute and provide a complete, beautifully formatted response for this s
           if (engine === "opencode") {
             const runner = String(body.runner || "auto").toLowerCase();
             const endpoint = String(body.endpoint || "https://api.opencode.ai/v1").replace(/\/+$/, "");
-            const opencodeKey = apiKey || process.env.OPENCODE_API_KEY || "";
+            let opencodeKey = apiKey || process.env.OPENCODE_API_KEY || "";
+            if (!opencodeKey && user) {
+              const uSettings = await dbService.getUserSettings(user.id);
+              if (uSettings?.opencodeApiKey) opencodeKey = uSettings.opencodeApiKey;
+            }
             const activeModel = model || "opencode/space-bunny-free";
             const isCliModel = activeModel.endsWith("-free") || activeModel.startsWith("opencode/");
             const shouldTryCli = runner === "cli" || runner === "auto" && (isCliModel || !opencodeKey);
@@ -948,14 +1038,19 @@ ${r.snippet}`).join("\n\n") : "- Successfully analyzed real-time data feeds for 
               };
             }
           } else {
-            if (!apiKey) {
-              throw new Error("NVIDIA API key is required");
+            let effectiveApiKey = apiKey;
+            if (!effectiveApiKey && user) {
+              const uSettings = await dbService.getUserSettings(user.id);
+              if (uSettings?.nvidiaApiKey) effectiveApiKey = uSettings.nvidiaApiKey;
+            }
+            if (!effectiveApiKey) {
+              throw new Error("NVIDIA API key is required. Please add your key in Settings.");
             }
             let accountModels = [];
             try {
               const probe = await fetch("https://integrate.api.nvidia.com/v1/models", {
                 headers: {
-                  "Authorization": `Bearer ${apiKey}`,
+                  "Authorization": `Bearer ${effectiveApiKey}`,
                   "Accept": "application/json"
                 }
               });
@@ -1013,7 +1108,7 @@ ${r.snippet}`).join("\n\n") : "- Successfully analyzed real-time data feeds for 
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
-                    "Authorization": `Bearer ${apiKey}`,
+                    "Authorization": `Bearer ${effectiveApiKey}`,
                     "Accept": "application/json"
                   },
                   body: JSON.stringify({
@@ -1033,10 +1128,10 @@ ${r.snippet}`).join("\n\n") : "- Successfully analyzed real-time data feeds for 
                 } else {
                   const errText = await nvResponse.text();
                   lastErrorText = `NVIDIA API error (${nvResponse.status}) for ${currentModel}: ${errText.slice(0, 260)}`;
-                  if (nvResponse.status === 410 || nvResponse.status === 404) {
-                    continue;
+                  if (nvResponse.status === 401) {
+                    break;
                   }
-                  break;
+                  continue;
                 }
               } catch (fetchErr) {
                 lastErrorText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
@@ -1145,7 +1240,7 @@ function readBody(req, limit = 1e6) {
   });
 }
 
-// api/index.ts
+// server/serverless-entry.ts
 var autotaskHandler = createAutotaskRoutes();
 async function handler(req, res) {
   try {

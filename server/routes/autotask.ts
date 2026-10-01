@@ -337,10 +337,12 @@ export function createAutotaskRoutes(): RouteHandler {
         }
 
         const token = await dbService.createSession(user.id, user.email);
+        const settings = await dbService.getUserSettings(user.id);
         return json(res, 200, {
           ok: true,
           user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
           token,
+          settings: settings || {},
         });
       } catch (err) {
         return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -363,9 +365,11 @@ export function createAutotaskRoutes(): RouteHandler {
         const user = await dbService.validateSession(token);
         if (!user) return json(res, 401, { ok: false, error: "Session invalid or expired." });
 
+        const settings = await dbService.getUserSettings(user.id);
         return json(res, 200, {
           ok: true,
           user: { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt },
+          settings: settings || {},
         });
       } catch (err) {
         return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -379,6 +383,45 @@ export function createAutotaskRoutes(): RouteHandler {
         const token = String(body.token || "").trim();
         if (token) await dbService.deleteSession(token);
         return json(res, 200, { ok: true });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // =============================================
+    // USER SETTINGS & API KEY PERSISTENCE (MONGODB)
+    // =============================================
+
+    // GET /api/autotask/settings — Fetch user configuration & API keys
+    if (path === "/api/autotask/settings" && method === "GET") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+
+        const settings = await dbService.getUserSettings(user.id);
+        return json(res, 200, { ok: true, settings: settings || {} });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // POST /api/autotask/settings — Update user configuration & API keys in MongoDB
+    if (path === "/api/autotask/settings" && method === "POST") {
+      try {
+        const user = await authenticateUser();
+        if (!user) return json(res, 401, { ok: false, error: "Authentication required." });
+
+        const body = await getJsonBody(req, readBody);
+        const saved = await dbService.saveUserSettings(user.id, {
+          nvidiaApiKey: body.nvidiaApiKey !== undefined ? String(body.nvidiaApiKey).trim() : undefined,
+          nvidiaModel: body.nvidiaModel !== undefined ? String(body.nvidiaModel).trim() : undefined,
+          opencodeApiKey: body.opencodeApiKey !== undefined ? String(body.opencodeApiKey).trim() : undefined,
+          opencodeModel: body.opencodeModel !== undefined ? String(body.opencodeModel).trim() : undefined,
+          opencodeEndpoint: body.opencodeEndpoint !== undefined ? String(body.opencodeEndpoint).trim() : undefined,
+          opencodeRunner: body.opencodeRunner !== undefined ? String(body.opencodeRunner).trim() : undefined,
+        });
+
+        return json(res, 200, { ok: true, settings: saved });
       } catch (err) {
         return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
       }
@@ -722,7 +765,11 @@ Formatting instructions:
           if (engine === "opencode") {
             const runner = String(body.runner || "auto").toLowerCase();
             const endpoint = String(body.endpoint || "https://api.opencode.ai/v1").replace(/\/+$/, "");
-            const opencodeKey = apiKey || process.env.OPENCODE_API_KEY || "";
+            let opencodeKey = apiKey || process.env.OPENCODE_API_KEY || "";
+            if (!opencodeKey && user) {
+              const uSettings = await dbService.getUserSettings(user.id);
+              if (uSettings?.opencodeApiKey) opencodeKey = uSettings.opencodeApiKey;
+            }
             const activeModel = model || "opencode/space-bunny-free";
 
             const isCliModel = activeModel.endsWith("-free") || activeModel.startsWith("opencode/");
@@ -834,8 +881,14 @@ ${
             // ============================================
             // B. NVIDIA NIM ENGINE EXECUTION (PRESERVED)
             // ============================================
-            if (!apiKey) {
-              throw new Error("NVIDIA API key is required");
+            let effectiveApiKey = apiKey;
+            if (!effectiveApiKey && user) {
+              const uSettings = await dbService.getUserSettings(user.id);
+              if (uSettings?.nvidiaApiKey) effectiveApiKey = uSettings.nvidiaApiKey;
+            }
+
+            if (!effectiveApiKey) {
+              throw new Error("NVIDIA API key is required. Please add your key in Settings.");
             }
 
             // Query models active for this account
@@ -843,7 +896,7 @@ ${
             try {
               const probe = await fetch("https://integrate.api.nvidia.com/v1/models", {
                 headers: {
-                  "Authorization": `Bearer ${apiKey}`,
+                  "Authorization": `Bearer ${effectiveApiKey}`,
                   "Accept": "application/json",
                 },
               });
@@ -908,7 +961,7 @@ ${
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
-                    "Authorization": `Bearer ${apiKey}`,
+                    "Authorization": `Bearer ${effectiveApiKey}`,
                     "Accept": "application/json",
                   },
                   body: JSON.stringify({
@@ -929,10 +982,12 @@ ${
                 } else {
                   const errText = await nvResponse.text();
                   lastErrorText = `NVIDIA API error (${nvResponse.status}) for ${currentModel}: ${errText.slice(0, 260)}`;
-                  if (nvResponse.status === 410 || nvResponse.status === 404) {
-                    continue;
+                  if (nvResponse.status === 401) {
+                    // API key is definitely rejected, don't try other models
+                    break;
                   }
-                  break;
+                  // For 404, 410, 429, 500, 502, 503, 504 - smoothly try next fallback model
+                  continue;
                 }
               } catch (fetchErr) {
                 lastErrorText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);

@@ -316,7 +316,7 @@ export function CalendarWorkspace({ user, onSignOut }: CalendarWorkspaceProps) {
           <div className="absolute bottom-0 left-1/4 w-[500px] h-[300px] bg-emerald-500/[0.03] blur-[120px] rounded-full pointer-events-none" />
 
           {/* TOP APP BAR */}
-          <header className="relative z-30 shrink-0 border-b border-slate-200/90 autotask-glass px-3 sm:px-6 py-2 sm:py-3 flex items-center justify-between gap-2 shadow-xs">
+          <header className="relative z-30 shrink-0 border-b border-slate-200/90 autotask-glass px-3 sm:px-6 pt-[max(env(safe-area-inset-top,0px),2.5rem)] pb-2 sm:py-3 flex items-center justify-between gap-2 shadow-xs">
             {/* Left Section: Logo + Title / Month */}
             <div className="flex items-center gap-2 sm:gap-4 min-w-0">
               {/* Brand Mark */}

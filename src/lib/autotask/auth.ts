@@ -1,4 +1,5 @@
 import { autotaskFetch } from "./api";
+import { applyCloudSettings } from "./settings";
 
 export interface AutotaskUser {
   id: string;
@@ -38,6 +39,9 @@ export async function restoreSession(): Promise<AutotaskUser | null> {
       const data = await res.json();
       if (data.ok && data.user) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data.user));
+        if (data.settings) {
+          applyCloudSettings(data.settings);
+        }
         return data.user;
       }
       // Server explicitly revoked or expired this session token
@@ -119,6 +123,9 @@ export async function signIn(
       }
       if (data.token) {
         localStorage.setItem(TOKEN_KEY, data.token);
+      }
+      if (data.settings) {
+        applyCloudSettings(data.settings);
       }
       return { ok: true, user: data.user };
     }
