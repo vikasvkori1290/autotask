@@ -1,6 +1,10 @@
 {
   "version": 2,
   "functions": {
+    "api/index.ts": {
+      "maxDuration": 60,
+      "memory": 1024
+    },
     "api/index.js": {
       "maxDuration": 60,
       "memory": 1024
@@ -9,11 +13,11 @@
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/api/index.js"
+      "dest": "/api/index.ts"
     },
     {
       "src": "/(.*)",
-      "dest": "/api/index.js"
+      "dest": "/api/index.ts"
     }
   ]
 }
