@@ -14,7 +14,7 @@ export async function handleAutotaskRequest(req: IncomingMessage, res: ServerRes
     res.statusCode = 204;
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, PUT, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Bypass-Tunnel-Reminder, ngrok-skip-browser-warning, *");
     res.end();
     return true;
   }
@@ -25,8 +25,8 @@ export async function handleAutotaskRequest(req: IncomingMessage, res: ServerRes
 
   // Set CORS headers for all autotask API responses
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Bypass-Tunnel-Reminder, ngrok-skip-browser-warning, *");
 
   try {
     const out = await autotaskRouteHandler({

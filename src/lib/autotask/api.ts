@@ -55,8 +55,15 @@ export async function autotaskFetch(path: string, init?: RequestInit): Promise<R
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   const fullUrl = base ? `${base}${cleanPath}` : cleanPath;
 
+  const headers = new Headers(init?.headers || {});
+  headers.set("Bypass-Tunnel-Reminder", "true");
+  headers.set("ngrok-skip-browser-warning", "true");
+
   try {
-    return await fetch(fullUrl, init);
+    return await fetch(fullUrl, {
+      ...init,
+      headers,
+    });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     if (base) {

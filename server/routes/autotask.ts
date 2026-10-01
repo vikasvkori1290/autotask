@@ -1,5 +1,5 @@
 import { PASS, type RouteHandler } from "./table.ts";
-import { dbService } from "../autotask-db.ts";
+import { dbService, type DbTask } from "../autotask-db.ts";
 import fs from "fs";
 import path from "path";
 import { execSync, spawn } from "child_process";
@@ -251,8 +251,21 @@ async function getJsonBody(req: any, readBodyFn: any): Promise<any> {
   }
 }
 
+// Server-level in-flight execution registry to guarantee exactly ONE model call per task
+const inFlightExecutions = new Map<string, Promise<any>>();
+
 export function createAutotaskRoutes(): RouteHandler {
   return async ({ req, res, path, method, json, readBody }) => {
+    // Helper: Authenticate user from Bearer token
+    const authenticateUser = async () => {
+      let token = "";
+      if (req.headers.authorization) {
+        token = req.headers.authorization.replace(/^Bearer\s+/i, "").trim();
+      }
+      if (!token) return null;
+      return dbService.validateSession(token);
+    };
+
     // 0. DB Status
     if (path === "/api/autotask/db-status") {
       return json(res, 200, { ok: true, ...dbService.getStatus() });
@@ -372,16 +385,6 @@ export function createAutotaskRoutes(): RouteHandler {
     // TASK SYNC API — Cross-device task management
     // =============================================
 
-    // Helper: Authenticate user from token header or body
-    const authenticateUser = async () => {
-      let token = "";
-      if (req.headers.authorization) {
-        token = req.headers.authorization.replace(/^Bearer\s+/i, "").trim();
-      }
-      if (!token) return null;
-      return dbService.validateSession(token);
-    };
-
     // 5a. GET /api/autotask/tasks — Fetch all tasks for authenticated user
     if (path === "/api/autotask/tasks" && method === "GET") {
       try {
@@ -395,6 +398,36 @@ export function createAutotaskRoutes(): RouteHandler {
       }
     }
 
+    // Helper: Determine whether incoming client task state should supersede existing server task
+    const shouldUpdateTaskState = (existing: any, incoming: any): boolean => {
+      if (!existing) return true;
+
+      const isCompleted = existing.status === "ready" || existing.status === "delivered";
+      const isIncomingIncomplete = incoming.status === "queued" || incoming.status === "researching" || incoming.status === "failed";
+      const isUserEdit = incoming.prompt !== existing.prompt || incoming.targetTime !== existing.targetTime;
+
+      // Rule 1: A completed task (ready/delivered) CANNOT be downgraded to queued, researching, or failed
+      // by a background sync unless the user explicitly modified the prompt or target time!
+      if (isCompleted && existing.result && isIncomingIncomplete && !isUserEdit) {
+        return false;
+      }
+
+      // Rule 2: If a task is already researching on server, don't revert to queued
+      if (existing.status === "researching" && incoming.status === "queued" && !isUserEdit) {
+        return false;
+      }
+
+      // Rule 3: Always retain existing result if incoming has none
+      if (!incoming.result && existing.result && !isUserEdit) {
+        incoming.result = existing.result;
+        if (incoming.status === "queued" || incoming.status === "researching") {
+          incoming.status = existing.status;
+        }
+      }
+
+      return (incoming.updatedAt || 0) >= (existing.updatedAt || 0);
+    };
+
     // 5b. POST /api/autotask/tasks — Create or upsert a single task
     if (path === "/api/autotask/tasks" && method === "POST") {
       try {
@@ -407,10 +440,22 @@ export function createAutotaskRoutes(): RouteHandler {
           return json(res, 400, { ok: false, error: "Task with id is required." });
         }
 
-        // Ensure task belongs to this user
         task.userId = user.id;
-        task.updatedAt = task.updatedAt || Date.now();
 
+        // Check existing server task to prevent clobbering completed results
+        const existing = await dbService.getTaskById(task.id, user.id);
+        if (existing) {
+          if (!shouldUpdateTaskState(existing, task)) {
+            // Server task is ahead (e.g. already ready or delivered) — return authoritative server state
+            return json(res, 200, { ok: true, task: existing });
+          }
+          if (!task.result && existing.result) {
+            task.result = existing.result;
+            task.status = existing.status;
+          }
+        }
+
+        task.updatedAt = task.updatedAt || Date.now();
         const saved = await dbService.upsertTask(task);
         return json(res, 200, { ok: true, task: saved });
       } catch (err) {
@@ -438,20 +483,27 @@ export function createAutotaskRoutes(): RouteHandler {
           serverMap.delete(delId);
         }
 
-        // Merge: client wins if updatedAt is newer, server wins otherwise
+        // Smart merge: protect completed results from being overwritten by lagging clients
         for (const clientTask of clientTasks) {
           if (!clientTask.id) continue;
           clientTask.userId = user.id;
-          clientTask.updatedAt = clientTask.updatedAt || Date.now();
 
           const serverTask = serverMap.get(clientTask.id);
-          if (!serverTask || clientTask.updatedAt >= (serverTask.updatedAt || 0)) {
+          if (!serverTask) {
+            clientTask.updatedAt = clientTask.updatedAt || Date.now();
+            await dbService.upsertTask(clientTask);
+            serverMap.set(clientTask.id, clientTask);
+          } else if (shouldUpdateTaskState(serverTask, clientTask)) {
+            if (!clientTask.result && serverTask.result) {
+              clientTask.result = serverTask.result;
+            }
+            clientTask.updatedAt = clientTask.updatedAt || Date.now();
             await dbService.upsertTask(clientTask);
             serverMap.set(clientTask.id, clientTask);
           }
         }
 
-        // Return full merged task list
+        // Return full authoritative merged task list
         const mergedTasks = await dbService.getTasksByUser(user.id);
         return json(res, 200, { ok: true, tasks: mergedTasks });
       } catch (err) {
@@ -577,9 +629,43 @@ export function createAutotaskRoutes(): RouteHandler {
     }
 
     // 4. Execute Autonomous Task using Web Search & AI Engine (NVIDIA or OpenCode)
+    // Server-enforced single-execution guarantee: exactly ONE model request per task
     if (path === "/api/autotask/execute" && method === "POST") {
       try {
         const body = await getJsonBody(req, readBody);
+        const taskId = String(body.taskId || "").trim();
+        const user = await authenticateUser();
+
+        // 1. If this task is already completed in MongoDB, return the stored result immediately!
+        // ZERO search calls, ZERO AI calls.
+        if (taskId && user) {
+          const existingTask = await dbService.getTaskById(taskId, user.id);
+          if (existingTask && (existingTask.status === "ready" || existingTask.status === "delivered") && existingTask.result) {
+            return json(res, 200, {
+              ok: true,
+              cached: true,
+              taskId,
+              summary: existingTask.result.summary,
+              sources: existingTask.result.sources || [],
+              completedAt: existingTask.result.completedAt || Date.now(),
+              model: existingTask.result.model,
+              engine: existingTask.result.engine,
+              runner: existingTask.result.runner,
+            });
+          }
+
+          // 2. If this task is ALREADY in-flight (e.g. mobile & desktop called simultaneously),
+          // attach to the existing execution promise instead of firing a duplicate AI model call!
+          if (inFlightExecutions.has(taskId)) {
+            try {
+              const inFlightResult = await inFlightExecutions.get(taskId);
+              return json(res, 200, inFlightResult);
+            } catch (inflightErr) {
+              return json(res, 500, { ok: false, error: String(inflightErr) });
+            }
+          }
+        }
+
         const engine = String(body.engine || "nvidia").toLowerCase();
         const apiKey = String(body.apiKey || "").trim();
         const model = String(body.model || "").trim();
@@ -590,23 +676,25 @@ export function createAutotaskRoutes(): RouteHandler {
           return json(res, 400, { ok: false, error: "Task prompt is required" });
         }
 
-        let searchResults: SearchResult[] = [];
-        let searchContext = "";
+        // Core single-execution worker
+        const executeTaskWork = async (): Promise<any> => {
+          let searchResults: SearchResult[] = [];
+          let searchContext = "";
 
-        if (searchEnabled) {
-          const searchQuery = body.customSearchQuery || prompt;
-          searchResults = await performWebSearch(searchQuery, 8);
-          if (searchResults.length > 0) {
-            searchContext = searchResults
-              .map((r, i) => `[${i + 1}] ${r.title} (${r.url})\n${r.snippet}`)
-              .join("\n\n");
+          if (searchEnabled) {
+            const searchQuery = body.customSearchQuery || prompt;
+            searchResults = await performWebSearch(searchQuery, 8);
+            if (searchResults.length > 0) {
+              searchContext = searchResults
+                .map((r, i) => `[${i + 1}] ${r.title} (${r.url})\n${r.snippet}`)
+                .join("\n\n");
+            }
           }
-        }
 
-        const dateStr = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-        const engineName = engine === "opencode" ? "OpenCode AI Engine" : "NVIDIA NIM Cloud";
+          const dateStr = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+          const engineName = engine === "opencode" ? "OpenCode AI Engine" : "NVIDIA NIM Cloud";
 
-        const systemMessage = `You are AutoTask AI, an elite autonomous research and task execution agent powered by ${engineName}.
+          const systemMessage = `You are AutoTask AI, an elite autonomous research and task execution agent powered by ${engineName}.
 Today's date is ${dateStr}.
 The user scheduled this task to be fully researched, synthesized, and prepared ahead of time so they receive a comprehensive, high-signal, actionable briefing.
 
@@ -616,103 +704,100 @@ Formatting instructions:
 - Cite relevant sources when available.
 - Be concise, objective, and dense with valuable information.`;
 
-        const userMessage = searchContext
-          ? `TASK INSTRUCTIONS:\n${prompt}\n\nLATEST REAL-TIME WEB SEARCH DATA:\n${searchContext}\n\nPlease synthesize the information above into a complete, thorough, beautifully formatted briefing.`
-          : `TASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
+          const userMessage = searchContext
+            ? `TASK INSTRUCTIONS:\n${prompt}\n\nLATEST REAL-TIME WEB SEARCH DATA:\n${searchContext}\n\nPlease synthesize the information above into a complete, thorough, beautifully formatted briefing.`
+            : `TASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
 
-        // ============================================
-        // A. OPENCODE ENGINE EXECUTION (LOCAL CLI & API)
-        // ============================================
-        if (engine === "opencode") {
-          const runner = String(body.runner || "auto").toLowerCase();
-          const endpoint = String(body.endpoint || "https://api.opencode.ai/v1").replace(/\/+$/, "");
-          const opencodeKey = apiKey || process.env.OPENCODE_API_KEY || "";
-          const activeModel = model || "opencode/space-bunny-free";
+          let finalResult: any = null;
 
-          const isCliModel = activeModel.endsWith("-free") || activeModel.startsWith("opencode/");
-          const shouldTryCli = runner === "cli" || (runner === "auto" && (isCliModel || !opencodeKey));
+          // ============================================
+          // A. OPENCODE ENGINE EXECUTION (LOCAL CLI & API)
+          // ============================================
+          if (engine === "opencode") {
+            const runner = String(body.runner || "auto").toLowerCase();
+            const endpoint = String(body.endpoint || "https://api.opencode.ai/v1").replace(/\/+$/, "");
+            const opencodeKey = apiKey || process.env.OPENCODE_API_KEY || "";
+            const activeModel = model || "opencode/space-bunny-free";
 
-          // 1. Try Local Binary CLI if requested or auto-preferred
-          if (shouldTryCli) {
-            const cliInfo = getOpencodeCliInfo();
-            if (cliInfo.installed) {
-              const cliPrompt = searchContext
-                ? `${systemMessage}\n\nTASK INSTRUCTIONS:\n${prompt}\n\nLATEST REAL-TIME WEB SEARCH DATA:\n${searchContext}\n\nPlease synthesize the information above into a complete, thorough, beautifully formatted briefing.`
-                : `${systemMessage}\n\nTASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
+            const isCliModel = activeModel.endsWith("-free") || activeModel.startsWith("opencode/");
+            const shouldTryCli = runner === "cli" || (runner === "auto" && (isCliModel || !opencodeKey));
 
-              const cliRes = await runOpencodeBinary(cliPrompt, activeModel, opencodeKey, 65000);
-              if (cliRes.ok && cliRes.output) {
-                return json(res, 200, {
-                  ok: true,
-                  engine: "opencode",
-                  runner: "cli",
-                  cliVersion: cliInfo.version,
-                  model: activeModel,
-                  summary: cliRes.output,
-                  sources: searchResults,
-                  completedAt: Date.now(),
-                });
-              }
+            // 1. Try Local Binary CLI if requested or auto-preferred
+            if (shouldTryCli) {
+              const cliInfo = getOpencodeCliInfo();
+              if (cliInfo.installed) {
+                const cliPrompt = searchContext
+                  ? `${systemMessage}\n\nTASK INSTRUCTIONS:\n${prompt}\n\nLATEST REAL-TIME WEB SEARCH DATA:\n${searchContext}\n\nPlease synthesize the information above into a complete, thorough, beautifully formatted briefing.`
+                  : `${systemMessage}\n\nTASK INSTRUCTIONS:\n${prompt}\n\nPlease execute and provide a complete, beautifully formatted response for this scheduled task.`;
 
-              if (runner === "cli") {
-                return json(res, 500, {
-                  ok: false,
-                  error: `OpenCode CLI execution error: ${cliRes.error || "Execution failed"}`,
-                });
-              }
-            } else if (runner === "cli") {
-              return json(res, 400, {
-                ok: false,
-                error: "Local OpenCode CLI binary was not detected on this system. Switch runner to API or install opencode CLI.",
-              });
-            }
-          }
-
-          // 2. Try OpenCode remote API completion
-          try {
-            const ocHeaders: Record<string, string> = {
-              "Content-Type": "application/json",
-              "Accept": "application/json",
-            };
-            if (opencodeKey) {
-              ocHeaders["Authorization"] = `Bearer ${opencodeKey}`;
-            }
-
-            const ocResponse = await fetch(`${endpoint}/chat/completions`, {
-              method: "POST",
-              headers: ocHeaders,
-              body: JSON.stringify({
-                model: activeModel,
-                messages: [
-                  { role: "system", content: systemMessage },
-                  { role: "user", content: userMessage },
-                ],
-                temperature: 0.3,
-                max_tokens: 3000,
-              }),
-            });
-
-            if (ocResponse.ok) {
-              const ocData = (await ocResponse.json()) as { choices?: Array<{ message?: { content?: string } }> };
-              const content = ocData.choices?.[0]?.message?.content;
-              if (content) {
-                return json(res, 200, {
-                  ok: true,
-                  engine: "opencode",
-                  runner: "api",
-                  model: activeModel,
-                  summary: content,
-                  sources: searchResults,
-                  completedAt: Date.now(),
-                });
+                const cliRes = await runOpencodeBinary(cliPrompt, activeModel, opencodeKey, 65000);
+                if (cliRes.ok && cliRes.output) {
+                  finalResult = {
+                    ok: true,
+                    engine: "opencode",
+                    runner: "cli",
+                    cliVersion: cliInfo.version,
+                    model: activeModel,
+                    summary: cliRes.output,
+                    sources: searchResults,
+                    completedAt: Date.now(),
+                  };
+                } else if (runner === "cli") {
+                  throw new Error(`OpenCode CLI execution error: ${cliRes.error || "Execution failed"}`);
+                }
+              } else if (runner === "cli") {
+                throw new Error("Local OpenCode CLI binary was not detected on this system. Switch runner to API or install opencode CLI.");
               }
             }
-          } catch (ocErr) {
-            console.debug("[Autotask] OpenCode endpoint connection:", ocErr);
-          }
 
-          // Fallback: If OpenCode key is empty or remote server is unreachable, generate an intelligent synthesis
-          const fallbackSummary = `### Executive Summary
+            // 2. Try OpenCode remote API completion
+            if (!finalResult) {
+              try {
+                const ocHeaders: Record<string, string> = {
+                  "Content-Type": "application/json",
+                  "Accept": "application/json",
+                };
+                if (opencodeKey) {
+                  ocHeaders["Authorization"] = `Bearer ${opencodeKey}`;
+                }
+
+                const ocResponse = await fetch(`${endpoint}/chat/completions`, {
+                  method: "POST",
+                  headers: ocHeaders,
+                  body: JSON.stringify({
+                    model: activeModel,
+                    messages: [
+                      { role: "system", content: systemMessage },
+                      { role: "user", content: userMessage },
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 3000,
+                  }),
+                });
+
+                if (ocResponse.ok) {
+                  const ocData = (await ocResponse.json()) as { choices?: Array<{ message?: { content?: string } }> };
+                  const content = ocData.choices?.[0]?.message?.content;
+                  if (content) {
+                    finalResult = {
+                      ok: true,
+                      engine: "opencode",
+                      runner: "api",
+                      model: activeModel,
+                      summary: content,
+                      sources: searchResults,
+                      completedAt: Date.now(),
+                    };
+                  }
+                }
+              } catch (ocErr) {
+                console.debug("[Autotask] OpenCode endpoint connection:", ocErr);
+              }
+            }
+
+            // Fallback: If OpenCode key is empty or remote server is unreachable, generate an intelligent synthesis
+            if (!finalResult) {
+              const fallbackSummary = `### Executive Summary
 AutoTask completed your scheduled task using **${activeModel}** (OpenCode Harness).
 Research scope: *"${prompt}"*
 
@@ -729,142 +814,192 @@ ${
 
 *Powered by OpenCode AI Engine*`;
 
-          return json(res, 200, {
-            ok: true,
-            engine: "opencode",
-            runner: "fallback",
-            model: activeModel,
-            summary: fallbackSummary,
-            sources: searchResults,
-            completedAt: Date.now(),
-          });
-        }
-
-        // ============================================
-        // B. NVIDIA NIM ENGINE EXECUTION (PRESERVED)
-        // ============================================
-        if (!apiKey) {
-          return json(res, 400, { ok: false, error: "NVIDIA API key is required" });
-        }
-
-        // 1. Query models active for this account
-        let accountModels: string[] = [];
-        try {
-          const probe = await fetch("https://integrate.api.nvidia.com/v1/models", {
-            headers: {
-              "Authorization": `Bearer ${apiKey}`,
-              "Accept": "application/json",
-            },
-          });
-          if (probe.ok) {
-            const probeData = (await probe.json()) as { data?: Array<{ id: string }> };
-            if (Array.isArray(probeData?.data)) {
-              accountModels = probeData.data.map((m) => m.id);
+              finalResult = {
+                ok: true,
+                engine: "opencode",
+                runner: "fallback",
+                model: activeModel,
+                summary: fallbackSummary,
+                sources: searchResults,
+                completedAt: Date.now(),
+              };
             }
-          }
-        } catch {
-          // ignore
-        }
-
-        const modelsToTry: string[] = [];
-        if (model && (accountModels.length === 0 || accountModels.includes(model))) {
-          modelsToTry.push(model);
-        }
-
-        if (accountModels.length > 0) {
-          const ranked = [...accountModels].sort((a, b) => {
-            const score = (id: string) => {
-              let s = 0;
-              const lower = id.toLowerCase();
-              if (lower.includes("instruct")) s += 10;
-              if (lower.includes("chat")) s += 8;
-              if (lower.includes("llama-3")) s += 6;
-              if (lower.includes("nemotron")) s += 5;
-              if (lower.includes("mistral")) s += 4;
-              if (lower.includes("qwen")) s += 3;
-              if (lower.includes("gemma")) s += 2;
-              return s;
-            };
-            return score(b) - score(a);
-          });
-
-          for (const m of ranked) {
-            if (!modelsToTry.includes(m)) {
-              modelsToTry.push(m);
+          } else {
+            // ============================================
+            // B. NVIDIA NIM ENGINE EXECUTION (PRESERVED)
+            // ============================================
+            if (!apiKey) {
+              throw new Error("NVIDIA API key is required");
             }
-          }
-        }
 
-        const defaults = [
-          "nvidia/llama-3.1-nemotron-70b-instruct",
-          "mistralai/mistral-large-2-instruct",
-          "mistralai/mistral-7b-instruct-v0.3",
-          "nvidia/nemotron-4-340b-instruct",
-        ];
-        for (const d of defaults) {
-          if (!modelsToTry.includes(d)) {
-            modelsToTry.push(d);
-          }
-        }
-
-        let lastErrorText = "";
-        let activeModelUsed = model || modelsToTry[0];
-        let nvData: { choices?: Array<{ message?: { content?: string } }> } | null = null;
-
-        for (const currentModel of modelsToTry) {
-          try {
-            const nvResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`,
-                "Accept": "application/json",
-              },
-              body: JSON.stringify({
-                model: currentModel,
-                messages: [
-                  { role: "system", content: systemMessage },
-                  { role: "user", content: userMessage },
-                ],
-                temperature: 0.3,
-                max_tokens: 3000,
-              }),
-            });
-
-            if (nvResponse.ok) {
-              nvData = (await nvResponse.json()) as { choices?: Array<{ message?: { content?: string } }> };
-              activeModelUsed = currentModel;
-              break;
-            } else {
-              const errText = await nvResponse.text();
-              lastErrorText = `NVIDIA API error (${nvResponse.status}) for ${currentModel}: ${errText.slice(0, 260)}`;
-              if (nvResponse.status === 410 || nvResponse.status === 404) {
-                continue;
+            // Query models active for this account
+            let accountModels: string[] = [];
+            try {
+              const probe = await fetch("https://integrate.api.nvidia.com/v1/models", {
+                headers: {
+                  "Authorization": `Bearer ${apiKey}`,
+                  "Accept": "application/json",
+                },
+              });
+              if (probe.ok) {
+                const probeData = (await probe.json()) as { data?: Array<{ id: string }> };
+                if (Array.isArray(probeData?.data)) {
+                  accountModels = probeData.data.map((m) => m.id);
+                }
               }
-              break;
+            } catch {
+              // ignore
             }
-          } catch (fetchErr) {
-            lastErrorText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+
+            const modelsToTry: string[] = [];
+            if (model && (accountModels.length === 0 || accountModels.includes(model))) {
+              modelsToTry.push(model);
+            }
+
+            if (accountModels.length > 0) {
+              const ranked = [...accountModels].sort((a, b) => {
+                const score = (id: string) => {
+                  let s = 0;
+                  const lower = id.toLowerCase();
+                  if (lower.includes("instruct")) s += 10;
+                  if (lower.includes("chat")) s += 8;
+                  if (lower.includes("llama-3")) s += 6;
+                  if (lower.includes("nemotron")) s += 5;
+                  if (lower.includes("mistral")) s += 4;
+                  if (lower.includes("qwen")) s += 3;
+                  if (lower.includes("gemma")) s += 2;
+                  return s;
+                };
+                return score(b) - score(a);
+              });
+
+              for (const m of ranked) {
+                if (!modelsToTry.includes(m)) {
+                  modelsToTry.push(m);
+                }
+              }
+            }
+
+            const defaults = [
+              "nvidia/llama-3.1-nemotron-70b-instruct",
+              "mistralai/mistral-large-2-instruct",
+              "mistralai/mistral-7b-instruct-v0.3",
+              "nvidia/nemotron-4-340b-instruct",
+            ];
+            for (const d of defaults) {
+              if (!modelsToTry.includes(d)) {
+                modelsToTry.push(d);
+              }
+            }
+
+            let lastErrorText = "";
+            let activeModelUsed = model || modelsToTry[0];
+            let nvData: { choices?: Array<{ message?: { content?: string } }> } | null = null;
+
+            for (const currentModel of modelsToTry) {
+              try {
+                const nvResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey}`,
+                    "Accept": "application/json",
+                  },
+                  body: JSON.stringify({
+                    model: currentModel,
+                    messages: [
+                      { role: "system", content: systemMessage },
+                      { role: "user", content: userMessage },
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 3000,
+                  }),
+                });
+
+                if (nvResponse.ok) {
+                  nvData = (await nvResponse.json()) as { choices?: Array<{ message?: { content?: string } }> };
+                  activeModelUsed = currentModel;
+                  break;
+                } else {
+                  const errText = await nvResponse.text();
+                  lastErrorText = `NVIDIA API error (${nvResponse.status}) for ${currentModel}: ${errText.slice(0, 260)}`;
+                  if (nvResponse.status === 410 || nvResponse.status === 404) {
+                    continue;
+                  }
+                  break;
+                }
+              } catch (fetchErr) {
+                lastErrorText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+              }
+            }
+
+            if (!nvData || !nvData.choices?.[0]?.message?.content) {
+              throw new Error(lastErrorText || "No response received from NVIDIA NIM API.");
+            }
+
+            finalResult = {
+              ok: true,
+              engine: "nvidia",
+              model: activeModelUsed,
+              summary: nvData.choices[0].message.content,
+              sources: searchResults,
+              completedAt: Date.now(),
+            };
           }
+
+          // 4. SAVE DIRECTLY TO MONGODB IMMEDIATELY!
+          // This guarantees that once the model responds, the data is safely persisted
+          // in MongoDB for that user and task. Neither device will ever need to search again.
+          if (taskId && user && finalResult?.ok) {
+            try {
+              const existingRecord = await dbService.getTaskById(taskId, user.id);
+              const taskRecord: DbTask = existingRecord || {
+                id: taskId,
+                userId: user.id,
+                title: prompt.slice(0, 40),
+                prompt,
+                targetTime: Date.now(),
+                recurrence: "once",
+                status: "ready",
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              };
+
+              taskRecord.status = "ready";
+              taskRecord.readyAt = Date.now();
+              taskRecord.updatedAt = Date.now();
+              taskRecord.result = {
+                summary: finalResult.summary,
+                sources: finalResult.sources || [],
+                completedAt: finalResult.completedAt || Date.now(),
+                model: finalResult.model,
+                engine: finalResult.engine,
+                runner: finalResult.runner,
+              };
+              taskRecord.error = undefined;
+              await dbService.upsertTask(taskRecord);
+            } catch (dbSaveErr) {
+              console.error("[Autotask] Failed to save completed result to MongoDB:", dbSaveErr);
+            }
+          }
+
+          return finalResult;
+        };
+
+        // Manage single-flight execution
+        if (taskId) {
+          const taskExecutionPromise = executeTaskWork();
+          inFlightExecutions.set(taskId, taskExecutionPromise);
+          try {
+            const resultData = await taskExecutionPromise;
+            return json(res, 200, resultData);
+          } finally {
+            inFlightExecutions.delete(taskId);
+          }
+        } else {
+          const resultData = await executeTaskWork();
+          return json(res, 200, resultData);
         }
-
-        if (!nvData || !nvData.choices?.[0]?.message?.content) {
-          return json(res, 500, {
-            ok: false,
-            error: lastErrorText || "No response received from NVIDIA NIM API.",
-          });
-        }
-
-        const content = nvData.choices[0].message.content;
-
-        return json(res, 200, {
-          ok: true,
-          engine: "nvidia",
-          model: activeModelUsed,
-          summary: content,
-          sources: searchResults,
-          completedAt: Date.now(),
-        });
       } catch (err) {
         return json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
       }

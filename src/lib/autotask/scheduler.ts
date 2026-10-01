@@ -141,21 +141,29 @@ export async function syncTasksWithServer(): Promise<AutoTask[]> {
 }
 
 /**
- * Push a single task update to the server (fire-and-forget with local cache)
+ * Push a single task update to the server (with local cache and authoritative sync return)
  */
-async function pushTaskToServer(task: AutoTask): Promise<void> {
+async function pushTaskToServer(task: AutoTask): Promise<AutoTask | null> {
   const token = getSessionToken();
-  if (!token) return;
+  if (!token) return null;
 
   try {
-    await autotaskFetch("/api/autotask/tasks", {
+    const res = await autotaskFetch("/api/autotask/tasks", {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify({ task }),
     });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && data.ok && data.task) {
+        return data.task as AutoTask;
+      }
+    }
   } catch {
     // Server unreachable — local cache is the fallback
   }
+  return null;
 }
 
 /**
@@ -334,20 +342,35 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
       }
     }
 
-    // 2. Execute queued tasks in the background
+    // 2. Execute queued tasks in the background (single-device claim & conflict-free)
     const queuedTask = tasks.find((t) => t.status === "queued");
     if (queuedTask && !isRunnerExecuting) {
       const taskEngine = queuedTask.engine || "nvidia";
 
+      // Mark locally as researching so this client doesn't pick it up again
+      isRunnerExecuting = true;
+      queuedTask.status = "researching";
+      queuedTask.updatedAt = Date.now();
+      saveTasks(tasks);
+      onUpdate([...tasks]);
+
+      // Claim on server: Check if another device already finished or claimed this task!
+      const serverClaim = await pushTaskToServer(queuedTask);
+      if (serverClaim && (serverClaim.status === "ready" || serverClaim.status === "delivered") && serverClaim.result) {
+        // Another device (mobile or desktop) already completed this task!
+        tasks = getTasks();
+        const existingIdx = tasks.findIndex((t) => t.id === queuedTask.id);
+        if (existingIdx >= 0) {
+          tasks[existingIdx] = serverClaim;
+          saveTasks(tasks);
+          onUpdate([...tasks]);
+        }
+        isRunnerExecuting = false;
+        return;
+      }
+
       // If OpenCode is chosen
       if (taskEngine === "opencode") {
-        isRunnerExecuting = true;
-        queuedTask.status = "researching";
-        queuedTask.updatedAt = Date.now();
-        saveTasks(tasks);
-        onUpdate([...tasks]);
-        void pushTaskToServer(queuedTask);
-
         const opencodeKey = getOpencodeApiKey();
         const opencodeModel = queuedTask.model || getOpencodeModel();
         const opencodeEndpoint = getOpencodeEndpoint();
@@ -357,8 +380,9 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         try {
           const res = await autotaskFetch("/api/autotask/execute", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: getAuthHeaders(),
             body: JSON.stringify({
+              taskId: queuedTask.id,
               engine: "opencode",
               runner: getOpencodeRunner(),
               apiKey: opencodeKey,
@@ -390,6 +414,12 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         tasks = getTasks();
         const target = tasks.find((t) => t.id === queuedTask.id);
         if (target) {
+          // If another device already delivered a result while we were running, keep existing ready state
+          if ((target.status === "ready" || target.status === "delivered") && target.result) {
+            isRunnerExecuting = false;
+            return;
+          }
+
           if (result) {
             target.status = "ready";
             target.readyAt = Date.now();
@@ -414,13 +444,6 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
         // NVIDIA Execution
         const apiKey = getNvidiaApiKey();
         if (apiKey) {
-          isRunnerExecuting = true;
-          queuedTask.status = "researching";
-          queuedTask.updatedAt = Date.now();
-          saveTasks(tasks);
-          onUpdate([...tasks]);
-          void pushTaskToServer(queuedTask);
-
           const model = queuedTask.model || getNvidiaModel();
           let result: TaskResult | null = null;
           let executionError = "";
@@ -428,8 +451,9 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
           try {
             const res = await autotaskFetch("/api/autotask/execute", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: getAuthHeaders(),
               body: JSON.stringify({
+                taskId: queuedTask.id,
                 engine: "nvidia",
                 apiKey,
                 model,
@@ -462,6 +486,12 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
           const target = tasks.find((t) => t.id === queuedTask.id);
 
           if (target) {
+            // If another device already delivered a result while we were running, keep existing ready state
+            if ((target.status === "ready" || target.status === "delivered") && target.result) {
+              isRunnerExecuting = false;
+              return;
+            }
+
             if (result) {
               target.status = "ready";
               target.readyAt = Date.now();
@@ -481,6 +511,8 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             void pushTaskToServer(target);
           }
 
+          isRunnerExecuting = false;
+        } else {
           isRunnerExecuting = false;
         }
       }

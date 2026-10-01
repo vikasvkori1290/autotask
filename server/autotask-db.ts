@@ -312,6 +312,19 @@ class AutotaskDatabase {
     return this.fallbackMemory.tasks.filter((t) => t.userId === userId);
   }
 
+  public async getTaskById(taskId: string, userId: string): Promise<DbTask | null> {
+    if (this.isConnected && this.db) {
+      try {
+        const found = await this.db.collection<DbTask>("tasks").findOne({ id: taskId, userId });
+        if (found) return found;
+      } catch (err) {
+        console.error("[Autotask DB] getTaskById error:", err);
+      }
+    }
+    this.fallbackMemory = loadFallbackDb();
+    return this.fallbackMemory.tasks.find((t) => t.id === taskId && t.userId === userId) || null;
+  }
+
   public async upsertTask(task: DbTask): Promise<DbTask> {
     task.updatedAt = Date.now();
 
