@@ -10,11 +10,9 @@ export function AutotaskRoot() {
   const [hasNvidiaKey, setHasNvidiaKey] = useState<boolean>(() => Boolean(getNvidiaApiKey()));
 
   useEffect(() => {
-    // Validate session with MongoDB / backend so the user is never asked to sign in again
+    // Validate session with MongoDB / backend so unauthenticated/revoked users are immediately routed to AuthGate
     restoreSession().then((user) => {
-      if (user) {
-        setCurrentUser(user);
-      }
+      setCurrentUser(user);
     });
     setHasNvidiaKey(Boolean(getNvidiaApiKey()));
   }, []);

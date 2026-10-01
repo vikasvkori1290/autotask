@@ -1,11 +1,12 @@
-// server/routes/types.ts
-var PASS = /* @__PURE__ */ Symbol("route.pass");
-
-// server/autotask-db.ts
+// api/index.ts
 import { MongoClient } from "mongodb";
 import { scryptSync, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import fs from "fs";
+import path from "path";
+import { execSync, spawn } from "child_process";
+var PASS = /* @__PURE__ */ Symbol("route.pass");
 try {
   const envPath = resolve(process.cwd(), ".env");
   if (existsSync(envPath)) {
@@ -286,11 +287,6 @@ var AutotaskDatabase = class {
   }
 };
 var dbService = new AutotaskDatabase();
-
-// server/routes/autotask.ts
-import fs from "fs";
-import path from "path";
-import { execSync, spawn } from "child_process";
 var DEFAULT_CLI_MODELS = [
   { id: "opencode/space-bunny-free", name: "Space Bunny Free", badge: "Local CLI \xB7 Free", isCli: true },
   { id: "opencode/nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning", badge: "Local CLI \xB7 Free", isCli: true },
@@ -1107,8 +1103,6 @@ ${r.snippet}`).join("\n\n") : "- Successfully analyzed real-time data feeds for 
     return PASS;
   };
 }
-
-// server/harness/http.ts
 var parsedBodies = /* @__PURE__ */ new WeakMap();
 function readBody(req, limit = 1e6) {
   return new Promise((resolve2, reject) => {
@@ -1144,8 +1138,6 @@ function readBody(req, limit = 1e6) {
     req.on("error", (e) => fail(400, e instanceof Error ? e.message : String(e)));
   });
 }
-
-// api/index.ts
 var autotaskHandler = createAutotaskRoutes();
 async function handler(req, res) {
   try {

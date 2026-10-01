@@ -638,10 +638,13 @@ export function createAutotaskRoutes(): RouteHandler {
         const body = await getJsonBody(req, readBody);
         const taskId = String(body.taskId || "").trim();
         const user = await authenticateUser();
+        if (!user) {
+          return json(res, 401, { ok: false, error: "Authentication required to execute tasks." });
+        }
 
         // 1. If this task is already completed in MongoDB, return the stored result immediately!
         // ZERO search calls, ZERO AI calls.
-        if (taskId && user) {
+        if (taskId) {
           const existingTask = await dbService.getTaskById(taskId, user.id);
           if (existingTask && (existingTask.status === "ready" || existingTask.status === "delivered") && existingTask.result) {
             return json(res, 200, {

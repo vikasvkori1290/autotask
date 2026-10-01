@@ -40,6 +40,10 @@ export async function restoreSession(): Promise<AutotaskUser | null> {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data.user));
         return data.user;
       }
+      // Server explicitly revoked or expired this session token
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(TOKEN_KEY);
+      return null;
     }
   } catch (err) {
     console.debug("[Autotask] Session check offline fallback:", err);
