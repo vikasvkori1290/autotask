@@ -34,6 +34,9 @@ export default async function handler(req: any, res: any) {
       let dbConnected = false;
       try {
         const { dbService } = await import("../server/autotask-db.ts");
+        if (!dbService.getStatus().connected) {
+          await dbService.connect();
+        }
         dbConnected = dbService.getStatus().connected;
       } catch {
         // ignore

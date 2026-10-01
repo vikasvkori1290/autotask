@@ -1,7 +1,8 @@
 // Centralized API configuration and fetch wrapper for AutoTask
-// Handles seamless communication whether running on Web (localhost or deployed domain)
+// Handles seamless communication whether running on Web (localhost or deployed domain like Netlify)
 // or inside Mobile Android APK (Capacitor).
 
+export const DEFAULT_PRODUCTION_BACKEND = "https://autotask-mocha.vercel.app";
 const STORAGE_SERVER_KEY = "autotask_server_url";
 
 export function isMobileApp(): boolean {
@@ -16,7 +17,7 @@ export function isMobileApp(): boolean {
 }
 
 export function getApiBaseUrl(): string {
-  if (typeof window === "undefined") return "";
+  if (typeof window === "undefined") return DEFAULT_PRODUCTION_BACKEND;
 
   // 1. Explicit user-configured server URL (saved in localStorage)
   const saved = localStorage.getItem(STORAGE_SERVER_KEY);
@@ -30,14 +31,20 @@ export function getApiBaseUrl(): string {
     return envUrl.trim().replace(/\/+$/, "");
   }
 
-  // 3. If running inside Mobile APK (Capacitor), localhost:80 does not exist on the phone,
-  // so default to the developer machine's local Wi-Fi IP or configured server.
+  // 3. Inside Mobile APK (Capacitor): Connect directly to your live Vercel backend
   if (isMobileApp()) {
-    return "http://192.168.0.101:5199";
+    return DEFAULT_PRODUCTION_BACKEND;
   }
 
-  // 4. In standard Web browser, relative URL "" automatically hits the current host
-  return "";
+  // 4. In Web browser:
+  // If running on local development (localhost / 127.0.0.1 on dev port), use relative path to hit local Vite proxy/dev server.
+  // Otherwise (deployed on Netlify or remote domain), connect directly to your live Vercel backend.
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return "";
+  }
+
+  return DEFAULT_PRODUCTION_BACKEND;
 }
 
 export function setApiBaseUrl(url: string): void {
