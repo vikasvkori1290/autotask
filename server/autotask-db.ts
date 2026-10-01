@@ -80,7 +80,8 @@ export interface DbTask {
   notifiedDelivered?: boolean;
 }
 
-const FALLBACK_DIR = join(process.cwd(), ".data");
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
+const FALLBACK_DIR = isServerless ? join("/tmp", ".data") : join(process.cwd(), ".data");
 const FALLBACK_FILE = join(FALLBACK_DIR, "autotask-db.json");
 
 interface FallbackDb {
@@ -125,7 +126,9 @@ class AutotaskDatabase {
   private mongoUri: string = process.env.MONGODB_URI || process.env.MONGO_URI || "mongodb://127.0.0.1:27017/autotask";
 
   constructor() {
-    this.connect();
+    this.connect().catch((err) => {
+      console.warn("[Autotask DB] Background initial connect attempt:", err instanceof Error ? err.message : String(err));
+    });
   }
 
   public async connect(): Promise<boolean> {

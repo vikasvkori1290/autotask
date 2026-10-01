@@ -1,8 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createAutotaskRoutes } from "../server/routes/autotask.ts";
 import { json, readBody } from "../server/harness/http.ts";
+import { dbService } from "../server/autotask-db.ts";
 
-const autotaskHandler = createAutotaskRoutes();
+let autotaskHandler: any = null;
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   // CORS Headers allowing requests from Netlify, local dev, and Mobile APK
@@ -21,7 +22,30 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   const url = new URL(req.url || "/", `${protocol}://${host}`);
   const path = url.pathname;
 
+  // Root health-check endpoint so visiting https://autotask-mocha.vercel.app directly renders success
+  if (path === "/" || path === "/api" || path === "/api/health") {
+    return json(res, 200, {
+      ok: true,
+      service: "AutoTask Serverless Backend",
+      status: "online",
+      database: dbService.getStatus(),
+      endpoints: [
+        "/api/autotask/db-status",
+        "/api/autotask/auth/signup",
+        "/api/autotask/auth/signin",
+        "/api/autotask/auth/session",
+        "/api/autotask/tasks",
+        "/api/autotask/tasks/sync",
+        "/api/autotask/execute",
+      ],
+    });
+  }
+
   try {
+    if (!autotaskHandler) {
+      autotaskHandler = createAutotaskRoutes();
+    }
+
     await autotaskHandler({
       req,
       res,
