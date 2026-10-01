@@ -1,17 +1,4 @@
-export const PASS: unique symbol = Symbol("route.pass");
-
-export interface RouteContext {
-  req: any;
-  res: any;
-  url: URL;
-  path: string;
-  method: string;
-  auth: any;
-  json: any;
-  readBody: any;
-}
-
-export type RouteHandler = (ctx: RouteContext) => Promise<typeof PASS | void>;
+import { PASS, type RouteHandler } from "./types.ts";
 import { dbService, type DbTask } from "../autotask-db.ts";
 import fs from "fs";
 import path from "path";
