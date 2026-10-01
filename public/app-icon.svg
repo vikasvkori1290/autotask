@@ -1,118 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="AutoTask AI">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="AutoTask">
   <defs>
-    <!-- Outer Tile Clip -->
-    <clipPath id="tile-clip">
-      <rect width="1024" height="1024" rx="230" />
+    <clipPath id="squircle">
+      <rect width="1024" height="1024" rx="224" />
     </clipPath>
-
-    <!-- Deep Tech Indigo Background -->
-    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#080C16" />
-      <stop offset="45%" stop-color="#111827" />
-      <stop offset="100%" stop-color="#1E1B4B" />
-    </linearGradient>
-
-    <!-- Radial Aura Glow behind the emblem -->
-    <radialGradient id="aura-glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#6366F1" stop-opacity="0.38" />
-      <stop offset="50%" stop-color="#4F46E5" stop-opacity="0.18" />
-      <stop offset="100%" stop-color="#0B0F19" stop-opacity="0" />
-    </radialGradient>
-
-    <!-- Calendar Tablet Body Gradient -->
-    <linearGradient id="tablet-surface" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#1E293B" stop-opacity="0.85" />
-      <stop offset="100%" stop-color="#0F172A" stop-opacity="0.95" />
-    </linearGradient>
-
-    <!-- Calendar Tablet Border Gradient -->
-    <linearGradient id="tablet-border" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#818CF8" stop-opacity="0.75" />
-      <stop offset="40%" stop-color="#6366F1" stop-opacity="0.35" />
-      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0.6" />
-    </linearGradient>
-
-    <!-- Header Bar Gradient -->
-    <linearGradient id="header-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#4F46E5" />
-      <stop offset="50%" stop-color="#6366F1" />
-      <stop offset="100%" stop-color="#8B5CF6" />
-    </linearGradient>
-
-    <!-- Primary AI Sparkle Gradient -->
-    <linearGradient id="sparkle-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FFFFFF" />
-      <stop offset="30%" stop-color="#E0E7FF" />
-      <stop offset="70%" stop-color="#818CF8" />
-      <stop offset="100%" stop-color="#38BDF8" />
-    </linearGradient>
-
-    <!-- Sparkle Shadow/Glow Filter -->
-    <filter id="soft-glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="16" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-    </filter>
   </defs>
+  <g clip-path="url(#squircle)">
+    <!-- Deep Solid Black Background -->
+    <rect width="1024" height="1024" fill="#000000" />
 
-  <g clip-path="url(#tile-clip)">
-    <!-- Main Background -->
-    <rect width="1024" height="1024" fill="url(#bg-grad)" />
-
-    <!-- Ambient Glow Circle -->
-    <circle cx="512" cy="530" r="420" fill="url(#aura-glow)" />
-
-    <!-- Subtle Diagonal Pattern Grid -->
-    <g opacity="0.04" stroke="#FFFFFF" stroke-width="2">
-      <line x1="0" y1="200" x2="1024" y2="200" />
-      <line x1="0" y1="400" x2="1024" y2="400" />
-      <line x1="0" y1="600" x2="1024" y2="600" />
-      <line x1="0" y1="800" x2="1024" y2="800" />
-      <line x1="200" y1="0" x2="200" y2="1024" />
-      <line x1="400" y1="0" x2="400" y2="1024" />
-      <line x1="600" y1="0" x2="600" y2="1024" />
-      <line x1="800" y1="0" x2="800" y2="1024" />
-    </g>
-
-    <!-- Calendar Tablet Outer Card -->
-    <!-- Base Shape: x=212, y=232, w=600, h=620, rx=72 -->
-    <rect x="212" y="232" width="600" height="620" rx="72" fill="url(#tablet-surface)" stroke="url(#tablet-border)" stroke-width="12" />
-
-    <!-- Calendar Header Stripe -->
-    <path d="M 218 340 L 806 340" stroke="#334155" stroke-width="4" stroke-opacity="0.8" />
-    
-    <!-- Top Binder Hooks / Rings -->
-    <!-- Left Ring: x=348, y=184, w=44, h=96, rx=22 -->
-    <rect x="348" y="184" width="44" height="96" rx="22" fill="#0F172A" stroke="#818CF8" stroke-width="8" />
-    <rect x="354" y="200" width="32" height="64" rx="16" fill="url(#header-grad)" />
-
-    <!-- Right Ring: x=632, y=184, w=44, h=96, rx=22 -->
-    <rect x="632" y="184" width="44" height="96" rx="22" fill="#0F172A" stroke="#818CF8" stroke-width="8" />
-    <rect x="638" y="200" width="32" height="64" rx="16" fill="url(#header-grad)" />
-
-    <!-- Date Dot Indicators on Top Header -->
-    <circle cx="282" cy="292" r="10" fill="#6366F1" fill-opacity="0.7" />
-    <circle cx="318" cy="292" r="10" fill="#6366F1" fill-opacity="0.4" />
-    <circle cx="716" cy="292" r="10" fill="#38BDF8" fill-opacity="0.4" />
-    <circle cx="752" cy="292" r="10" fill="#38BDF8" fill-opacity="0.7" />
-
-    <!-- Central Glowing AI Autonomous Sparkle -->
-    <!-- Center at (512, 570) -->
-    <!-- Ambient Sparkle Glow Behind -->
-    <path d="M 512 400 Q 512 570 342 570 Q 512 570 512 740 Q 512 570 682 570 Q 512 570 512 400 Z"
-          fill="#6366F1" opacity="0.3" filter="url(#soft-glow)" />
-
-    <!-- Main 4-Point AI Star -->
-    <path d="M 512 418 Q 512 570 360 570 Q 512 570 512 722 Q 512 570 664 570 Q 512 570 512 418 Z"
-          fill="url(#sparkle-grad)" />
-
-    <!-- Inner Core Diamond Highlight -->
-    <polygon points="512,525 545,570 512,615 479,570" fill="#FFFFFF" opacity="0.95" />
-
-    <!-- Top-Right Accent AI Sparkle (Secondary) -->
-    <path d="M 686 420 Q 686 470 636 470 Q 686 470 686 520 Q 686 470 736 470 Q 686 470 686 420 Z"
-          fill="url(#sparkle-grad)" opacity="0.85" />
-
-    <!-- Subtle Edge Highlight Frame (Tile Glass Effect) -->
-    <rect x="4" y="4" width="1016" height="1016" rx="226" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-opacity="0.12" />
+    <!-- Bold, Precision-Engineered Geometric 'A' (White) -->
+    <path fill="#FFFFFF" fill-rule="evenodd"
+          d="M 480 236
+             C 496 206, 528 206, 544 236
+             L 798 732
+             C 810 754, 794 782, 768 782
+             L 662 782
+             C 644 782, 628 772, 620 756
+             L 570 652
+             L 454 652
+             L 404 756
+             C 396 772, 380 782, 362 782
+             L 256 782
+             C 230 782, 214 754, 226 732
+             Z
+             M 512 372
+             L 598 548
+             L 426 548
+             Z" />
   </g>
 </svg>
