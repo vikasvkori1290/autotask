@@ -136,59 +136,66 @@ class AutotaskDatabase {
   private client: MongoClient | null = null;
   private db: Db | null = null;
   private isConnected = false;
-  private isConnecting = false;
+  private connectPromise: Promise<boolean> | null = null;
+  private lastError: string | null = null;
   private fallbackMemory: FallbackDb = loadFallbackDb();
   private mongoUri: string = process.env.MONGODB_URI || process.env.MONGO_URI || "mongodb://127.0.0.1:27017/autotask";
 
-  constructor() {
-    this.connect().catch((err) => {
-      console.warn("[Autotask DB] Background initial connect attempt:", err instanceof Error ? err.message : String(err));
-    });
+  public async connect(): Promise<boolean> {
+    if (this.isConnected && this.db) return true;
+    if (this.connectPromise) return this.connectPromise;
+
+    this.connectPromise = (async () => {
+      try {
+        console.log(`[Autotask DB] Connecting to MongoDB at: ${this.mongoUri.replace(/:([^:@]{4})[^:@]*@/, ":****@")}`);
+        this.client = new MongoClient(this.mongoUri, {
+          serverSelectionTimeoutMS: 8000,
+          connectTimeoutMS: 8000,
+        });
+
+        await this.client.connect();
+        this.db = this.client.db();
+        this.isConnected = true;
+        this.lastError = null;
+        console.log("[Autotask DB] Successfully connected to MongoDB!");
+
+        // Ensure indexes (catch errors so they don't break operation)
+        await Promise.allSettled([
+          this.db.collection("users").createIndex({ email: 1 }, { unique: true }),
+          this.db.collection("sessions").createIndex({ token: 1 }, { unique: true }),
+          this.db.collection("tasks").createIndex({ userId: 1 }),
+          this.db.collection("tasks").createIndex({ id: 1 }, { unique: true }),
+          this.db.collection("user_settings").createIndex({ userId: 1 }, { unique: true }),
+        ]);
+
+        // Migrate any fallback users to MongoDB if newly connected
+        if (this.fallbackMemory.users.length > 0) {
+          for (const u of this.fallbackMemory.users) {
+            await this.db.collection("users").updateOne(
+              { email: u.email },
+              { $setOnInsert: u },
+              { upsert: true }
+            ).catch(() => {});
+          }
+        }
+
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.lastError = msg;
+        console.warn(`[Autotask DB] MongoDB connection not established (${msg}). Using persistent local database fallback.`);
+        this.isConnected = false;
+        this.connectPromise = null;
+        return false;
+      }
+    })();
+
+    return this.connectPromise;
   }
 
-  public async connect(): Promise<boolean> {
-    if (this.isConnected) return true;
-    if (this.isConnecting) return false;
-
-    this.isConnecting = true;
-    try {
-      console.log(`[Autotask DB] Attempting connection to MongoDB at: ${this.mongoUri.replace(/:([^:@]{4})[^:@]*@/, ":****@")}`);
-      this.client = new MongoClient(this.mongoUri, {
-        serverSelectionTimeoutMS: 2500,
-        connectTimeoutMS: 3000,
-      });
-
-      await this.client.connect();
-      this.db = this.client.db();
-      this.isConnected = true;
-      console.log("[Autotask DB] Successfully connected to MongoDB!");
-
-      // Ensure indexes
-      await this.db.collection("users").createIndex({ email: 1 }, { unique: true });
-      await this.db.collection("sessions").createIndex({ token: 1 }, { unique: true });
-      await this.db.collection("tasks").createIndex({ userId: 1 });
-      await this.db.collection("tasks").createIndex({ id: 1 }, { unique: true });
-      await this.db.collection("user_settings").createIndex({ userId: 1 }, { unique: true });
-
-      // Migrate any fallback users to MongoDB if newly connected
-      if (this.fallbackMemory.users.length > 0) {
-        for (const u of this.fallbackMemory.users) {
-          await this.db.collection("users").updateOne(
-            { email: u.email },
-            { $setOnInsert: u },
-            { upsert: true }
-          );
-        }
-      }
-
-      this.isConnecting = false;
-      return true;
-    } catch (err) {
-      console.warn(`[Autotask DB] MongoDB connection not established (${err instanceof Error ? err.message : String(err)}). Using persistent local database fallback.`);
-      this.isConnected = false;
-      this.isConnecting = false;
-      return false;
-    }
+  public async ensureConnected(): Promise<boolean> {
+    if (this.isConnected && this.db) return true;
+    return this.connect();
   }
 
   public getStatus() {
@@ -196,6 +203,7 @@ class AutotaskDatabase {
       connected: this.isConnected,
       mode: this.isConnected ? "mongodb" : "persistent_local",
       uri: this.mongoUri.replace(/:([^:@]{4})[^:@]*@/, ":****@"),
+      lastError: this.lastError || undefined,
     };
   }
 
@@ -212,6 +220,7 @@ class AutotaskDatabase {
   }
 
   public async findUserByEmail(email: string): Promise<DbUser | null> {
+    await this.ensureConnected();
     const cleanEmail = email.trim().toLowerCase();
     if (this.isConnected && this.db) {
       try {
@@ -226,6 +235,7 @@ class AutotaskDatabase {
   }
 
   public async createUser(name: string, email: string, passwordHash: string, salt: string): Promise<DbUser> {
+    await this.ensureConnected();
     const cleanEmail = email.trim().toLowerCase();
     const newUser: DbUser = {
       id: "usr_" + randomBytes(6).toString("hex"),
@@ -253,6 +263,7 @@ class AutotaskDatabase {
   }
 
   public async createSession(userId: string, email: string): Promise<string> {
+    await this.ensureConnected();
     const token = randomBytes(32).toString("hex");
     const session: DbSession = {
       token,
@@ -279,6 +290,7 @@ class AutotaskDatabase {
 
   public async validateSession(token: string): Promise<DbUser | null> {
     if (!token) return null;
+    await this.ensureConnected();
 
     let session: DbSession | null = null;
     if (this.isConnected && this.db) {
@@ -302,6 +314,7 @@ class AutotaskDatabase {
   }
 
   public async deleteSession(token: string): Promise<void> {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         await this.db.collection("sessions").deleteOne({ token });
@@ -320,6 +333,7 @@ class AutotaskDatabase {
   // =============================================
 
   public async getTasksByUser(userId: string): Promise<DbTask[]> {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         return await this.db.collection<DbTask>("tasks").find({ userId }).sort({ targetTime: 1 }).toArray();
@@ -332,6 +346,7 @@ class AutotaskDatabase {
   }
 
   public async getTaskById(taskId: string, userId: string): Promise<DbTask | null> {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         const found = await this.db.collection<DbTask>("tasks").findOne({ id: taskId, userId });
@@ -345,6 +360,7 @@ class AutotaskDatabase {
   }
 
   public async upsertTask(task: DbTask): Promise<DbTask> {
+    await this.ensureConnected();
     task.updatedAt = Date.now();
 
     if (this.isConnected && this.db) {
@@ -378,7 +394,83 @@ class AutotaskDatabase {
     }
   }
 
+  public async claimTaskForExecution(
+    taskId: string,
+    userId: string
+  ): Promise<{ claimed: boolean; task: DbTask | null }> {
+    await this.ensureConnected();
+
+    if (this.isConnected && this.db) {
+      try {
+        const col = this.db.collection<DbTask>("tasks");
+        const existing = await col.findOne({ id: taskId, userId });
+
+        if (!existing) {
+          return { claimed: true, task: null };
+        }
+
+        // 1. If already completed with a result, DO NOT RE-EXECUTE!
+        if ((existing.status === "ready" || existing.status === "delivered") && existing.result) {
+          return { claimed: false, task: existing };
+        }
+
+        // 2. If already researching within the last 90 seconds, another device has claimed it!
+        const now = Date.now();
+        if (existing.status === "researching" && existing.updatedAt && now - existing.updatedAt < 90000) {
+          return { claimed: false, task: existing };
+        }
+
+        // 3. Atomically claim it
+        const res = await col.findOneAndUpdate(
+          {
+            id: taskId,
+            userId,
+            $or: [
+              { status: { $in: ["queued", "failed"] } },
+              { status: "researching", updatedAt: { $lt: now - 90000 } },
+            ],
+          },
+          {
+            $set: {
+              status: "researching",
+              updatedAt: now,
+            },
+          },
+          { returnDocument: "after" }
+        );
+
+        if (res) {
+          return { claimed: true, task: res as DbTask };
+        }
+
+        const fresh = await col.findOne({ id: taskId, userId });
+        return { claimed: false, task: fresh };
+      } catch (err) {
+        console.error("[Autotask DB] claimTaskForExecution error in mongo:", err);
+      }
+    }
+
+    this.fallbackMemory = loadFallbackDb();
+    const existing = this.fallbackMemory.tasks.find((t) => t.id === taskId && t.userId === userId);
+    if (!existing) return { claimed: true, task: null };
+
+    if ((existing.status === "ready" || existing.status === "delivered") && existing.result) {
+      return { claimed: false, task: existing };
+    }
+
+    const now = Date.now();
+    if (existing.status === "researching" && existing.updatedAt && now - existing.updatedAt < 90000) {
+      return { claimed: false, task: existing };
+    }
+
+    existing.status = "researching";
+    existing.updatedAt = now;
+    saveFallbackDb(this.fallbackMemory);
+    return { claimed: true, task: existing };
+  }
+
   public async deleteTaskById(taskId: string, userId: string): Promise<boolean> {
+    await this.ensureConnected();
     let deleted = false;
     if (this.isConnected && this.db) {
       try {
@@ -404,6 +496,7 @@ class AutotaskDatabase {
   // =============================================
 
   public async getUserSettings(userId: string): Promise<DbUserSettings | null> {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         const found = await this.db.collection<DbUserSettings>("user_settings").findOne({ userId });
@@ -417,6 +510,7 @@ class AutotaskDatabase {
   }
 
   public async saveUserSettings(userId: string, partial: Partial<DbUserSettings>): Promise<DbUserSettings> {
+    await this.ensureConnected();
     const existing = await this.getUserSettings(userId);
     const updated: DbUserSettings = {
       userId,

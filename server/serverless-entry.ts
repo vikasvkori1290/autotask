@@ -32,16 +32,17 @@ export default async function handler(req: any, res: any) {
       res.end(JSON.stringify(data));
     };
 
-    if (!dbService.getStatus().connected) {
-      await dbService.connect();
-    }
+    await dbService.ensureConnected();
 
     if (path === "/" || path === "/api" || path === "/api/health") {
+      const dbStatus = dbService.getStatus();
       return sendJson(200, {
         ok: true,
         service: "AutoTask Serverless Backend",
         status: "online",
-        databaseConnected: dbService.getStatus().connected,
+        databaseConnected: dbStatus.connected,
+        databaseMode: dbStatus.mode,
+        databaseError: dbStatus.lastError,
         time: new Date().toISOString(),
       });
     }

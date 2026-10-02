@@ -60,56 +60,64 @@ var AutotaskDatabase = class {
   client = null;
   db = null;
   isConnected = false;
-  isConnecting = false;
+  connectPromise = null;
+  lastError = null;
   fallbackMemory = loadFallbackDb();
   mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI || "mongodb://127.0.0.1:27017/autotask";
-  constructor() {
-    this.connect().catch((err) => {
-      console.warn("[Autotask DB] Background initial connect attempt:", err instanceof Error ? err.message : String(err));
-    });
-  }
   async connect() {
-    if (this.isConnected) return true;
-    if (this.isConnecting) return false;
-    this.isConnecting = true;
-    try {
-      console.log(`[Autotask DB] Attempting connection to MongoDB at: ${this.mongoUri.replace(/:([^:@]{4})[^:@]*@/, ":****@")}`);
-      this.client = new MongoClient(this.mongoUri, {
-        serverSelectionTimeoutMS: 2500,
-        connectTimeoutMS: 3e3
-      });
-      await this.client.connect();
-      this.db = this.client.db();
-      this.isConnected = true;
-      console.log("[Autotask DB] Successfully connected to MongoDB!");
-      await this.db.collection("users").createIndex({ email: 1 }, { unique: true });
-      await this.db.collection("sessions").createIndex({ token: 1 }, { unique: true });
-      await this.db.collection("tasks").createIndex({ userId: 1 });
-      await this.db.collection("tasks").createIndex({ id: 1 }, { unique: true });
-      await this.db.collection("user_settings").createIndex({ userId: 1 }, { unique: true });
-      if (this.fallbackMemory.users.length > 0) {
-        for (const u of this.fallbackMemory.users) {
-          await this.db.collection("users").updateOne(
-            { email: u.email },
-            { $setOnInsert: u },
-            { upsert: true }
-          );
+    if (this.isConnected && this.db) return true;
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = (async () => {
+      try {
+        console.log(`[Autotask DB] Connecting to MongoDB at: ${this.mongoUri.replace(/:([^:@]{4})[^:@]*@/, ":****@")}`);
+        this.client = new MongoClient(this.mongoUri, {
+          serverSelectionTimeoutMS: 8e3,
+          connectTimeoutMS: 8e3
+        });
+        await this.client.connect();
+        this.db = this.client.db();
+        this.isConnected = true;
+        this.lastError = null;
+        console.log("[Autotask DB] Successfully connected to MongoDB!");
+        await Promise.allSettled([
+          this.db.collection("users").createIndex({ email: 1 }, { unique: true }),
+          this.db.collection("sessions").createIndex({ token: 1 }, { unique: true }),
+          this.db.collection("tasks").createIndex({ userId: 1 }),
+          this.db.collection("tasks").createIndex({ id: 1 }, { unique: true }),
+          this.db.collection("user_settings").createIndex({ userId: 1 }, { unique: true })
+        ]);
+        if (this.fallbackMemory.users.length > 0) {
+          for (const u of this.fallbackMemory.users) {
+            await this.db.collection("users").updateOne(
+              { email: u.email },
+              { $setOnInsert: u },
+              { upsert: true }
+            ).catch(() => {
+            });
+          }
         }
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.lastError = msg;
+        console.warn(`[Autotask DB] MongoDB connection not established (${msg}). Using persistent local database fallback.`);
+        this.isConnected = false;
+        this.connectPromise = null;
+        return false;
       }
-      this.isConnecting = false;
-      return true;
-    } catch (err) {
-      console.warn(`[Autotask DB] MongoDB connection not established (${err instanceof Error ? err.message : String(err)}). Using persistent local database fallback.`);
-      this.isConnected = false;
-      this.isConnecting = false;
-      return false;
-    }
+    })();
+    return this.connectPromise;
+  }
+  async ensureConnected() {
+    if (this.isConnected && this.db) return true;
+    return this.connect();
   }
   getStatus() {
     return {
       connected: this.isConnected,
       mode: this.isConnected ? "mongodb" : "persistent_local",
-      uri: this.mongoUri.replace(/:([^:@]{4})[^:@]*@/, ":****@")
+      uri: this.mongoUri.replace(/:([^:@]{4})[^:@]*@/, ":****@"),
+      lastError: this.lastError || void 0
     };
   }
   hashPassword(password, existingSalt) {
@@ -123,6 +131,7 @@ var AutotaskDatabase = class {
     return timingSafeEqual(derivedKey, storedHashBuffer);
   }
   async findUserByEmail(email) {
+    await this.ensureConnected();
     const cleanEmail = email.trim().toLowerCase();
     if (this.isConnected && this.db) {
       try {
@@ -136,6 +145,7 @@ var AutotaskDatabase = class {
     return this.fallbackMemory.users.find((u) => u.email === cleanEmail) || null;
   }
   async createUser(name, email, passwordHash, salt) {
+    await this.ensureConnected();
     const cleanEmail = email.trim().toLowerCase();
     const newUser = {
       id: "usr_" + randomBytes(6).toString("hex"),
@@ -159,6 +169,7 @@ var AutotaskDatabase = class {
     return newUser;
   }
   async createSession(userId, email) {
+    await this.ensureConnected();
     const token = randomBytes(32).toString("hex");
     const session = {
       token,
@@ -182,6 +193,7 @@ var AutotaskDatabase = class {
   }
   async validateSession(token) {
     if (!token) return null;
+    await this.ensureConnected();
     let session = null;
     if (this.isConnected && this.db) {
       try {
@@ -200,6 +212,7 @@ var AutotaskDatabase = class {
     return this.findUserByEmail(session.email);
   }
   async deleteSession(token) {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         await this.db.collection("sessions").deleteOne({ token });
@@ -215,6 +228,7 @@ var AutotaskDatabase = class {
   // TASK CRUD (per-user, synced across devices)
   // =============================================
   async getTasksByUser(userId) {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         return await this.db.collection("tasks").find({ userId }).sort({ targetTime: 1 }).toArray();
@@ -226,6 +240,7 @@ var AutotaskDatabase = class {
     return this.fallbackMemory.tasks.filter((t) => t.userId === userId);
   }
   async getTaskById(taskId, userId) {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         const found = await this.db.collection("tasks").findOne({ id: taskId, userId });
@@ -238,6 +253,7 @@ var AutotaskDatabase = class {
     return this.fallbackMemory.tasks.find((t) => t.id === taskId && t.userId === userId) || null;
   }
   async upsertTask(task) {
+    await this.ensureConnected();
     task.updatedAt = Date.now();
     if (this.isConnected && this.db) {
       try {
@@ -267,7 +283,65 @@ var AutotaskDatabase = class {
       await this.upsertTask(task);
     }
   }
+  async claimTaskForExecution(taskId, userId) {
+    await this.ensureConnected();
+    if (this.isConnected && this.db) {
+      try {
+        const col = this.db.collection("tasks");
+        const existing2 = await col.findOne({ id: taskId, userId });
+        if (!existing2) {
+          return { claimed: true, task: null };
+        }
+        if ((existing2.status === "ready" || existing2.status === "delivered") && existing2.result) {
+          return { claimed: false, task: existing2 };
+        }
+        const now2 = Date.now();
+        if (existing2.status === "researching" && existing2.updatedAt && now2 - existing2.updatedAt < 9e4) {
+          return { claimed: false, task: existing2 };
+        }
+        const res = await col.findOneAndUpdate(
+          {
+            id: taskId,
+            userId,
+            $or: [
+              { status: { $in: ["queued", "failed"] } },
+              { status: "researching", updatedAt: { $lt: now2 - 9e4 } }
+            ]
+          },
+          {
+            $set: {
+              status: "researching",
+              updatedAt: now2
+            }
+          },
+          { returnDocument: "after" }
+        );
+        if (res) {
+          return { claimed: true, task: res };
+        }
+        const fresh = await col.findOne({ id: taskId, userId });
+        return { claimed: false, task: fresh };
+      } catch (err) {
+        console.error("[Autotask DB] claimTaskForExecution error in mongo:", err);
+      }
+    }
+    this.fallbackMemory = loadFallbackDb();
+    const existing = this.fallbackMemory.tasks.find((t) => t.id === taskId && t.userId === userId);
+    if (!existing) return { claimed: true, task: null };
+    if ((existing.status === "ready" || existing.status === "delivered") && existing.result) {
+      return { claimed: false, task: existing };
+    }
+    const now = Date.now();
+    if (existing.status === "researching" && existing.updatedAt && now - existing.updatedAt < 9e4) {
+      return { claimed: false, task: existing };
+    }
+    existing.status = "researching";
+    existing.updatedAt = now;
+    saveFallbackDb(this.fallbackMemory);
+    return { claimed: true, task: existing };
+  }
   async deleteTaskById(taskId, userId) {
+    await this.ensureConnected();
     let deleted = false;
     if (this.isConnected && this.db) {
       try {
@@ -290,6 +364,7 @@ var AutotaskDatabase = class {
   // USER SETTINGS & API KEY PERSISTENCE (MONGODB)
   // =============================================
   async getUserSettings(userId) {
+    await this.ensureConnected();
     if (this.isConnected && this.db) {
       try {
         const found = await this.db.collection("user_settings").findOne({ userId });
@@ -302,6 +377,7 @@ var AutotaskDatabase = class {
     return (this.fallbackMemory.settings || []).find((s) => s.userId === userId) || null;
   }
   async saveUserSettings(userId, partial) {
+    await this.ensureConnected();
     const existing = await this.getUserSettings(userId);
     const updated = {
       userId,
@@ -861,19 +937,40 @@ function createAutotaskRoutes() {
           return json(res, 401, { ok: false, error: "Authentication required to execute tasks." });
         }
         if (taskId) {
-          const existingTask = await dbService.getTaskById(taskId, user.id);
-          if (existingTask && (existingTask.status === "ready" || existingTask.status === "delivered") && existingTask.result) {
-            return json(res, 200, {
-              ok: true,
-              cached: true,
-              taskId,
-              summary: existingTask.result.summary,
-              sources: existingTask.result.sources || [],
-              completedAt: existingTask.result.completedAt || Date.now(),
-              model: existingTask.result.model,
-              engine: existingTask.result.engine,
-              runner: existingTask.result.runner
-            });
+          const claim = await dbService.claimTaskForExecution(taskId, user.id);
+          if (!claim.claimed && claim.task) {
+            if ((claim.task.status === "ready" || claim.task.status === "delivered") && claim.task.result) {
+              return json(res, 200, {
+                ok: true,
+                cached: true,
+                taskId,
+                summary: claim.task.result.summary,
+                sources: claim.task.result.sources || [],
+                completedAt: claim.task.result.completedAt || Date.now(),
+                model: claim.task.result.model,
+                engine: claim.task.result.engine,
+                runner: claim.task.result.runner
+              });
+            }
+            if (claim.task.status === "researching") {
+              for (let i = 0; i < 20; i++) {
+                await new Promise((r) => setTimeout(r, 2e3));
+                const poll = await dbService.getTaskById(taskId, user.id);
+                if (poll && (poll.status === "ready" || poll.status === "delivered") && poll.result) {
+                  return json(res, 200, {
+                    ok: true,
+                    cached: true,
+                    taskId,
+                    summary: poll.result.summary,
+                    sources: poll.result.sources || [],
+                    completedAt: poll.result.completedAt || Date.now(),
+                    model: poll.result.model,
+                    engine: poll.result.engine,
+                    runner: poll.result.runner
+                  });
+                }
+              }
+            }
           }
           if (inFlightExecutions.has(taskId)) {
             try {
@@ -1266,15 +1363,16 @@ async function handler(req, res) {
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(data));
     };
-    if (!dbService.getStatus().connected) {
-      await dbService.connect();
-    }
+    await dbService.ensureConnected();
     if (path2 === "/" || path2 === "/api" || path2 === "/api/health") {
+      const dbStatus = dbService.getStatus();
       return sendJson(200, {
         ok: true,
         service: "AutoTask Serverless Backend",
         status: "online",
-        databaseConnected: dbService.getStatus().connected,
+        databaseConnected: dbStatus.connected,
+        databaseMode: dbStatus.mode,
+        databaseError: dbStatus.lastError,
         time: (/* @__PURE__ */ new Date()).toISOString()
       });
     }

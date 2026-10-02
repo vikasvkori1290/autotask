@@ -59,7 +59,7 @@ function autotaskPlugin(): Plugin {
           return;
         }
 
-        if (url === "/api/config" || url === "/.well-known/openmausbot/environment") {
+        if (url === "/api/config" || url === "/.well-known/autotask/environment" || url === "/.well-known/openmausbot/environment") {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({}));
           return;

@@ -280,15 +280,22 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
   let active = true;
   let syncCounter = 0;
 
+  // Immediate initial sync with MongoDB
+  void syncTasksWithServer().then((synced) => {
+    if (synced && synced.length > 0) {
+      onUpdate([...synced]);
+    }
+  });
+
   const tick = async () => {
     if (!active) return;
     let tasks = getTasks();
     let hasChanges = false;
     const now = Date.now();
 
-    // Periodic server sync every ~30 seconds (10 ticks × 3s interval)
+    // Fast server sync every ~9 seconds (3 ticks × 3s interval) to keep all devices in instant sync
     syncCounter++;
-    if (syncCounter >= 10) {
+    if (syncCounter >= 3) {
       syncCounter = 0;
       try {
         const synced = await syncTasksWithServer();
@@ -380,6 +387,20 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
       const serverClaim = await pushTaskToServer(queuedTask);
       if (serverClaim && (serverClaim.status === "ready" || serverClaim.status === "delivered") && serverClaim.result) {
         // Another device (mobile or desktop) already completed this task!
+        tasks = getTasks();
+        const existingIdx = tasks.findIndex((t) => t.id === queuedTask.id);
+        if (existingIdx >= 0) {
+          tasks[existingIdx] = serverClaim;
+          saveTasks(tasks);
+          onUpdate([...tasks]);
+        }
+        isRunnerExecuting = false;
+        return;
+      }
+
+      if (serverClaim && serverClaim.status === "researching" && serverClaim.updatedAt && Date.now() - serverClaim.updatedAt < 90000 && serverClaim.updatedAt !== queuedTask.updatedAt) {
+        // Another device is already actively researching this task right now!
+        // Back off and let the other device finish, then sync the result from MongoDB.
         tasks = getTasks();
         const existingIdx = tasks.findIndex((t) => t.id === queuedTask.id);
         if (existingIdx >= 0) {

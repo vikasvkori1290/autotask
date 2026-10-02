@@ -685,26 +685,50 @@ export function createAutotaskRoutes(): RouteHandler {
           return json(res, 401, { ok: false, error: "Authentication required to execute tasks." });
         }
 
-        // 1. If this task is already completed in MongoDB, return the stored result immediately!
-        // ZERO search calls, ZERO AI calls.
+        // 1. If this task is already completed in MongoDB or being researched by another device,
+        // NEVER fire a duplicate parallel search or AI request!
         if (taskId) {
-          const existingTask = await dbService.getTaskById(taskId, user.id);
-          if (existingTask && (existingTask.status === "ready" || existingTask.status === "delivered") && existingTask.result) {
-            return json(res, 200, {
-              ok: true,
-              cached: true,
-              taskId,
-              summary: existingTask.result.summary,
-              sources: existingTask.result.sources || [],
-              completedAt: existingTask.result.completedAt || Date.now(),
-              model: existingTask.result.model,
-              engine: existingTask.result.engine,
-              runner: existingTask.result.runner,
-            });
+          const claim = await dbService.claimTaskForExecution(taskId, user.id);
+          if (!claim.claimed && claim.task) {
+            // Task has already been completed in MongoDB — return immediately!
+            if ((claim.task.status === "ready" || claim.task.status === "delivered") && claim.task.result) {
+              return json(res, 200, {
+                ok: true,
+                cached: true,
+                taskId,
+                summary: claim.task.result.summary,
+                sources: claim.task.result.sources || [],
+                completedAt: claim.task.result.completedAt || Date.now(),
+                model: claim.task.result.model,
+                engine: claim.task.result.engine,
+                runner: claim.task.result.runner,
+              });
+            }
+
+            // Another device is currently researching. Poll MongoDB for up to 45 seconds
+            // to fetch the completed result directly without duplicate model execution.
+            if (claim.task.status === "researching") {
+              for (let i = 0; i < 20; i++) {
+                await new Promise((r) => setTimeout(r, 2000));
+                const poll = await dbService.getTaskById(taskId, user.id);
+                if (poll && (poll.status === "ready" || poll.status === "delivered") && poll.result) {
+                  return json(res, 200, {
+                    ok: true,
+                    cached: true,
+                    taskId,
+                    summary: poll.result.summary,
+                    sources: poll.result.sources || [],
+                    completedAt: poll.result.completedAt || Date.now(),
+                    model: poll.result.model,
+                    engine: poll.result.engine,
+                    runner: poll.result.runner,
+                  });
+                }
+              }
+            }
           }
 
-          // 2. If this task is ALREADY in-flight (e.g. mobile & desktop called simultaneously),
-          // attach to the existing execution promise instead of firing a duplicate AI model call!
+          // 2. If this task is ALREADY in-flight locally, attach to the existing execution promise
           if (inFlightExecutions.has(taskId)) {
             try {
               const inFlightResult = await inFlightExecutions.get(taskId);
