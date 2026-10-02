@@ -1,4 +1,4 @@
-import { createAutotaskRoutes } from "./routes/autotask.ts";
+import { createAutotaskRoutes, runServerTaskWorker } from "./routes/autotask.ts";
 import { dbService } from "./autotask-db.ts";
 import { readBody } from "./harness/http.ts";
 
@@ -33,6 +33,9 @@ export default async function handler(req: any, res: any) {
     };
 
     await dbService.ensureConnected();
+
+    // Trigger autonomous worker cycle on every serverless ping in background
+    void runServerTaskWorker().catch(() => {});
 
     if (path === "/" || path === "/api" || path === "/api/health") {
       const dbStatus = dbService.getStatus();

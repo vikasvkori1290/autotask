@@ -8,7 +8,7 @@ import {
   getOpencodeRunner,
   syncSettingsFromServer,
 } from "./settings.ts";
-import { sendTaskNotification } from "./notifications.ts";
+import { sendTaskNotification, scheduleDeliveryNotification } from "./notifications.ts";
 import { getSessionToken, getCurrentUser } from "./auth.ts";
 import { autotaskFetch } from "./api.ts";
 
@@ -224,6 +224,9 @@ export function addTask(
   // Async push to server
   void pushTaskToServer(newTask);
 
+  // Pre-schedule native alarm notification for delivery time (mobile Android background)
+  void scheduleDeliveryNotification(newTask);
+
   return newTask;
 }
 
@@ -353,19 +356,24 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
     }
 
     // 2. Execute queued tasks in the background (single-device claim & conflict-free)
+    // IMPORTANT: Research ONLY starts 30 minutes before the scheduled delivery time,
+    // OR immediately if the delivery time has already arrived or passed (late internet reconnection).
+    const LEAD_TIME_MS = 30 * 60 * 1000; // 30 minutes
     const queuedTask = tasks.find((t) => {
       if (t.status === "queued") {
         if (t.nextRetryAt && t.nextRetryAt > now) {
           return false;
         }
-        return true;
+        return now >= (t.targetTime - LEAD_TIME_MS);
       }
       return false;
     });
 
-    // Auto-restart any failed tasks if ready for retry
+    // Auto-restart any failed tasks if ready for retry and within the 30-minute window
     if (!queuedTask && !isRunnerExecuting) {
-      const failedTask = tasks.find((t) => t.status === "failed" && (!t.nextRetryAt || t.nextRetryAt <= now));
+      const failedTask = tasks.find(
+        (t) => t.status === "failed" && (!t.nextRetryAt || t.nextRetryAt <= now) && (now >= t.targetTime - LEAD_TIME_MS)
+      );
       if (failedTask) {
         failedTask.status = "queued";
         failedTask.nextRetryAt = Date.now() + 1000;
@@ -464,26 +472,59 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
           }
 
           if (result) {
-            target.status = "ready";
+            const isLateOrDue = Date.now() >= target.targetTime;
+            target.status = isLateOrDue ? "delivered" : "ready";
             target.readyAt = Date.now();
+            if (isLateOrDue) {
+              target.deliveredAt = Date.now();
+            }
             target.updatedAt = Date.now();
             target.result = result;
             target.error = undefined;
             target.retryCount = 0;
             target.nextRetryAt = undefined;
-            if (!target.notifiedReady) {
+
+            if (isLateOrDue) {
+              playDeliveryChime();
+              if (!target.notifiedDelivered) {
+                void sendTaskNotification(target, "delivered");
+                target.notifiedDelivered = true;
+              }
+              if (target.recurrence === "daily") {
+                let nextTarget = target.targetTime + 24 * 60 * 60 * 1000;
+                while (nextTarget <= Date.now()) {
+                  nextTarget += 24 * 60 * 60 * 1000;
+                }
+                const dailyNext: AutoTask = {
+                  id: "task_" + Math.random().toString(36).slice(2, 10),
+                  userId: target.userId,
+                  title: target.title,
+                  prompt: target.prompt,
+                  targetTime: nextTarget,
+                  recurrence: "daily",
+                  engine: target.engine,
+                  model: target.model,
+                  status: "queued",
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                };
+                tasks.push(dailyNext);
+                void pushTaskToServer(dailyNext);
+                void scheduleDeliveryNotification(dailyNext);
+              }
+            } else if (!target.notifiedReady) {
               void sendTaskNotification(target, "completed");
               target.notifiedReady = true;
             }
           } else {
-            // Auto-restart on failure with backoff
+            // Auto-restart on failure with backoff (e.g. offline / internet down)
             const retries = (target.retryCount || 0) + 1;
             target.retryCount = retries;
             target.updatedAt = Date.now();
             const backoffMs = Math.min(30000, 3000 * Math.pow(1.5, Math.min(retries - 1, 4)));
             target.nextRetryAt = Date.now() + backoffMs;
-            target.error = `${executionError || "Failed to execute OpenCode task."} (Auto-restarting attempt #${retries}...)`;
-            target.status = "queued"; // Auto-restart
+            target.error = `${executionError || "Network offline. AutoTask will research once internet is available."} (Auto-retry #${retries})`;
+            target.status = "queued"; // Stays queued, will retry autonomously
           }
           hasChanges = true;
           void pushTaskToServer(target);
@@ -550,26 +591,59 @@ export function startBackgroundRunner(onUpdate: (tasks: AutoTask[]) => void): ()
             }
 
             if (result) {
-              target.status = "ready";
+              const isLateOrDue = Date.now() >= target.targetTime;
+              target.status = isLateOrDue ? "delivered" : "ready";
               target.readyAt = Date.now();
+              if (isLateOrDue) {
+                target.deliveredAt = Date.now();
+              }
               target.updatedAt = Date.now();
               target.result = result;
               target.error = undefined;
               target.retryCount = 0;
               target.nextRetryAt = undefined;
-              if (!target.notifiedReady) {
+
+              if (isLateOrDue) {
+                playDeliveryChime();
+                if (!target.notifiedDelivered) {
+                  void sendTaskNotification(target, "delivered");
+                  target.notifiedDelivered = true;
+                }
+                if (target.recurrence === "daily") {
+                  let nextTarget = target.targetTime + 24 * 60 * 60 * 1000;
+                  while (nextTarget <= Date.now()) {
+                    nextTarget += 24 * 60 * 60 * 1000;
+                  }
+                  const dailyNext: AutoTask = {
+                    id: "task_" + Math.random().toString(36).slice(2, 10),
+                    userId: target.userId,
+                    title: target.title,
+                    prompt: target.prompt,
+                    targetTime: nextTarget,
+                    recurrence: "daily",
+                    engine: target.engine,
+                    model: target.model,
+                    status: "queued",
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                  };
+                  tasks.push(dailyNext);
+                  void pushTaskToServer(dailyNext);
+                  void scheduleDeliveryNotification(dailyNext);
+                }
+              } else if (!target.notifiedReady) {
                 void sendTaskNotification(target, "completed");
                 target.notifiedReady = true;
               }
             } else {
-              // Auto-restart on failure with backoff
+              // Auto-restart on failure with backoff (e.g. offline / internet down)
               const retries = (target.retryCount || 0) + 1;
               target.retryCount = retries;
               target.updatedAt = Date.now();
               const backoffMs = Math.min(30000, 3000 * Math.pow(1.5, Math.min(retries - 1, 4)));
               target.nextRetryAt = Date.now() + backoffMs;
-              target.error = `${executionError || "Failed to execute task."} (Auto-restarting attempt #${retries}...)`;
-              target.status = "queued"; // Auto-restart
+              target.error = `${executionError || "Network offline. AutoTask will research once internet is available."} (Auto-retry #${retries})`;
+              target.status = "queued"; // Stays queued, will retry autonomously
             }
             hasChanges = true;
             void pushTaskToServer(target);

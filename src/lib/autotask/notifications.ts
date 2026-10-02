@@ -107,3 +107,43 @@ export async function sendTaskNotification(
     console.error("[Notifications] Failed to send notification:", err);
   }
 }
+
+/**
+ * Pre-schedules a native alarm notification on mobile for the exact delivery time
+ * so the phone OS will fire the banner/sound even if the app has been closed all day.
+ */
+export async function scheduleDeliveryNotification(task: AutoTask): Promise<void> {
+  if (task.targetTime <= Date.now()) return;
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const targetTimeStr = new Date(task.targetTime).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      let hash = 0;
+      for (let i = 0; i < task.id.length; i++) {
+        hash = (hash << 5) - hash + task.id.charCodeAt(i);
+        hash |= 0;
+      }
+      const notifId = Math.abs(hash) || Math.floor(Math.random() * 2000000000);
+
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            id: notifId,
+            title: `AutoTask Delivered: ${task.title}`,
+            body: `Your scheduled briefing for ${targetTimeStr} is ready. Tap to view full research response.`,
+            schedule: { at: new Date(task.targetTime), allowWhileIdle: true },
+            largeIcon: "res://drawable/ic_launcher",
+            smallIcon: "res://drawable/ic_launcher",
+            extra: {
+              taskId: task.id,
+            },
+          },
+        ],
+      });
+    }
+  } catch (err) {
+    console.error("[Notifications] Failed to schedule native delivery notification:", err);
+  }
+}

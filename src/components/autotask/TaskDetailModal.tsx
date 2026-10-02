@@ -131,6 +131,20 @@ export function TaskDetailModal({ task, onClose, onDelete }: TaskDetailModalProp
 
         {/* Modal Content */}
         <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-6">
+          {task.status === "queued" && (
+            <div className="p-5 flex flex-col items-center justify-center text-center space-y-2.5 bg-amber-50/70 rounded-2xl border border-amber-200/80">
+              <div className="size-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-700">
+                <Clock className="size-5" />
+              </div>
+              <div className="text-sm font-bold text-amber-950">Scheduled for {timeFormatted}</div>
+              <p className="text-xs text-amber-800/90 max-w-md leading-relaxed">
+                Autonomous research will start automatically <strong>30 minutes before delivery</strong> ({
+                  new Date(task.targetTime - 30 * 60 * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                }). AutoTask runs in the background even if you don't open the app or website, and delivers right at delivery time.
+              </p>
+            </div>
+          )}
+
           {task.status === "researching" && (
             <div className="p-8 flex flex-col items-center justify-center text-center space-y-3 bg-slate-50 rounded-2xl border border-slate-200">
               <Loader2 className="size-8 text-indigo-600 animate-spin" />

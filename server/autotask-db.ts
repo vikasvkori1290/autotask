@@ -359,6 +359,47 @@ class AutotaskDatabase {
     return this.fallbackMemory.tasks.find((t) => t.id === taskId && t.userId === userId) || null;
   }
 
+  public async getPendingTasks(leadTimeMs = 30 * 60 * 1000): Promise<DbTask[]> {
+    await this.ensureConnected();
+    const now = Date.now();
+    const researchThreshold = now + leadTimeMs;
+    if (this.isConnected && this.db) {
+      try {
+        return await this.db
+          .collection<DbTask>("tasks")
+          .find({
+            $or: [
+              {
+                status: "queued",
+                targetTime: { $lte: researchThreshold },
+                $or: [
+                  { nextRetryAt: { $exists: false } },
+                  { nextRetryAt: { $lte: now } },
+                ],
+              },
+              {
+                status: "ready",
+                targetTime: { $lte: now },
+              },
+            ],
+          })
+          .sort({ targetTime: 1 })
+          .toArray();
+      } catch (err) {
+        console.error("[Autotask DB] getPendingTasks error:", err);
+      }
+    }
+    this.fallbackMemory = loadFallbackDb();
+    return this.fallbackMemory.tasks.filter((t) => {
+      if (t.status === "ready" && t.targetTime <= now) return true;
+      if (t.status === "queued" && t.targetTime <= researchThreshold) {
+        if (t.nextRetryAt && t.nextRetryAt > now) return false;
+        return true;
+      }
+      return false;
+    });
+  }
+
   public async upsertTask(task: DbTask): Promise<DbTask> {
     await this.ensureConnected();
     task.updatedAt = Date.now();
